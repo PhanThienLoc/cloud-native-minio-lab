@@ -1,0 +1,36 @@
+@startuml
+title Week 1 Architecture: MinIO Distributed Lab
+left to right direction
+skinparam shadowing false
+skinparam defaultFontName Arial
+skinparam componentStyle rectangle
+
+rectangle "Client / Data Ingestion" as Client #D9EAF7
+rectangle "Nginx Load Balancer" as Nginx #FFF2CC
+
+frame "Docker Virtual Network" as DockerNet {
+  rectangle "MinIO node 1" as M1 #D5E8D4
+  rectangle "MinIO node 2" as M2 #D5E8D4
+  rectangle "MinIO node 3" as M3 #D5E8D4
+  rectangle "MinIO node 4" as M4 #D5E8D4
+}
+
+rectangle "Prometheus / Grafana" as Metrics #F8CECC
+
+Client --> Nginx : S3 API requests
+Nginx --> M1 : route object traffic
+Nginx --> M2 : route object traffic
+Nginx --> M3 : route object traffic
+Nginx --> M4 : route object traffic
+
+M1 ..> Metrics : cluster metrics
+M2 ..> Metrics : cluster metrics
+M3 ..> Metrics : cluster metrics
+M4 ..> Metrics : cluster metrics
+
+note bottom of DockerNet
+4 MinIO nodes share the same Docker virtual network
+to model distributed storage behavior for the lab.
+end note
+
+@enduml

@@ -13,4 +13,4 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Validate docker compose file
-        run: docker compose -f infra/docker-compose.yml config
+        run: docker compose --env-file .env.example -f infra/docker-compose.yml config

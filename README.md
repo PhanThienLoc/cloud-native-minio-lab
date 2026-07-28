@@ -52,11 +52,11 @@ Dự án này giải quyết bài toán đó bằng cách thiết kế và tri�
 - Ứng dụng thuật toán Erasure Coding để đảm bảo tính toàn vẹn của dữ liệu trong môi trường đám mây giả lập.
 
 ## 2. Kiến trúc Hệ thống (System Architecture)
-*(Chèn hình ảnh sơ đồ UML hoặc Network Architecture vào đây)*
+![Sơ đồ kiến trúc MinIO](docs/architecture/week1-minio-architecture.png)
 
 Hệ thống được thiết kế theo mô hình phân tán hoàn toàn (Distributed Mode) với các thành phần:
 - **Tầng Ứng dụng (Client/Data Ingestion):** Script tự động tương tác qua S3 API để nạp tải dữ liệu (Load Generation).
-- **Tầng Lưu trữ (Storage Layer):** Cụm 4 node MinIO chạy độc lập trên nền tảng Docker Container, được liên kết qua một mạng ảo (Virtual Network) để tạo thành một Single Storage Pool.
+- **Tầng Lưu trữ (Storage Layer):** Cụm 4 node MinIO chạy distributed mode trên nền tảng Docker Container, cùng tham gia một mạng ảo (Virtual Network) để tạo thành một Single Storage Pool.
 - **Tầng Giám sát (Monitoring - Tùy chọn):** Thu thập metrics về thông lượng (Throughput) và độ trễ (Latency).
 
 ## 3. Khởi chạy Nhanh (Quick Start)
@@ -68,7 +68,8 @@ Dự án được đóng gói hoàn toàn bằng Infrastructure as Code (IaC) th
 
 **Lệnh khởi chạy:**
 ```bash
-git clone <đường-dẫn-repo>
-cd minio-distributed-storage/infra
-docker-compose up -d
+git clone https://github.com/PhanThienLoc/cloud-native-minio-lab.git
+cd cloud-native-minio-lab
+Copy-Item .env.example .env
+docker compose -f infra/docker-compose.yml up -d
 ```

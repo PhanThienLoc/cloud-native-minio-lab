@@ -53,6 +53,7 @@ Dự án này giải quyết bài toán đó bằng cách thiết kế và tri�
 
 ## 2. Kiến trúc Hệ thống (System Architecture)
 ![Sơ đồ kiến trúc MinIO](docs/architecture/week1-minio-architecture.png)
+Runbook chạy và kiểm thử theo flow 6 tuần: [`docs/project-runbook.md`](docs/project-runbook.md).
 
 Hệ thống được thiết kế theo mô hình phân tán hoàn toàn (Distributed Mode) với các thành phần:
 - **Tầng Ứng dụng (Client/Data Ingestion):** Script tự động tương tác qua S3 API để nạp tải dữ liệu (Load Generation).
@@ -67,9 +68,11 @@ Dự án được đóng gói hoàn toàn bằng Infrastructure as Code (IaC) th
 - Docker Compose >= 2.0
 
 **Lệnh khởi chạy:**
-```bash
+```powershell
 git clone https://github.com/PhanThienLoc/cloud-native-minio-lab.git
 cd cloud-native-minio-lab
 Copy-Item .env.example .env
-docker compose -f infra/docker-compose.yml up -d
+docker compose --env-file .env -f infra/docker-compose.yml config --quiet
+docker compose --env-file .env -f infra/docker-compose.yml up -d
+docker compose --env-file .env -f infra/docker-compose.yml ps
 ```

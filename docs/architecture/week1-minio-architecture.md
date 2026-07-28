@@ -8,6 +8,8 @@ Thiết kế kiến trúc lab mô phỏng lưu trữ phân tán bằng MinIO, đ
 
 ## Sơ đồ kiến trúc
 
+![Week 1 MinIO architecture](week1-minio-architecture.png)
+
 ```mermaid
 flowchart LR
   Client[Client / Data Ingestion] --> Nginx[Nginx Load Balancer]
@@ -43,7 +45,9 @@ flowchart LR
 
 ## Artifact đi kèm
 - `week1-minio-architecture.puml`
+- `week1-minio-architecture.png`
 
 ## Ghi chú
 - File `.puml` là nguồn sơ đồ chính để tiếp tục chỉnh sửa bằng PlantUML.
+- File `.png` là bản xuất để xem nhanh trên GitHub.
 - File Markdown này giữ vai trò tham chiếu nội dung và giải thích kiến trúc.

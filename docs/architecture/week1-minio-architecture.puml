@@ -6,9 +6,9 @@ skinparam defaultFontName Arial
 skinparam componentStyle rectangle
 
 rectangle "Client / Data Ingestion" as Client #D9EAF7
-rectangle "Nginx Load Balancer" as Nginx #FFF2CC
 
 frame "Docker Virtual Network" as DockerNet {
+  rectangle "Nginx Load Balancer" as Nginx #FFF2CC
   rectangle "MinIO node 1" as M1 #D5E8D4
   rectangle "MinIO node 2" as M2 #D5E8D4
   rectangle "MinIO node 3" as M3 #D5E8D4

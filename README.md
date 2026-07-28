@@ -52,8 +52,7 @@ Dự án này giải quyết bài toán đó bằng cách thiết kế và tri�
 - Ứng dụng thuật toán Erasure Coding để đảm bảo tính toàn vẹn của dữ liệu trong môi trường đám mây giả lập.
 
 ## 2. Kiến trúc Hệ thống (System Architecture)
-Tham chiếu sơ đồ kiến trúc: [`docs/architecture/week1-minio-architecture.md`](docs/architecture/week1-minio-architecture.md). Bản PNG sẽ được đồng bộ sau khi PR `fix/week1-finalization` được merge vào `develop`.
-
+![Sơ đồ kiến trúc MinIO](docs/architecture/week1-minio-architecture.png)
 Runbook chạy và kiểm thử theo flow 6 tuần: [`docs/project-runbook.md`](docs/project-runbook.md).
 
 Hệ thống được thiết kế theo mô hình phân tán hoàn toàn (Distributed Mode) với các thành phần:
@@ -77,5 +76,3 @@ docker compose --env-file .env -f infra/docker-compose.yml config --quiet
 docker compose --env-file .env -f infra/docker-compose.yml up -d
 docker compose --env-file .env -f infra/docker-compose.yml ps
 ```
-
-> Artifact sơ đồ PNG và nội dung kiến trúc tuần 1 sẽ được đồng bộ sau khi PR `fix/week1-finalization` được merge vào `develop`.

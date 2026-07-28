@@ -52,11 +52,13 @@ Dự án này giải quyết bài toán đó bằng cách thiết kế và tri�
 - Ứng dụng thuật toán Erasure Coding để đảm bảo tính toàn vẹn của dữ liệu trong môi trường đám mây giả lập.
 
 ## 2. Kiến trúc Hệ thống (System Architecture)
-*(Chèn hình ảnh sơ đồ UML hoặc Network Architecture vào đây)*
+Tham chiếu sơ đồ kiến trúc: [`docs/architecture/week1-minio-architecture.md`](docs/architecture/week1-minio-architecture.md). Bản PNG sẽ được đồng bộ sau khi PR `fix/week1-finalization` được merge vào `develop`.
+
+Runbook chạy và kiểm thử theo flow 6 tuần: [`docs/project-runbook.md`](docs/project-runbook.md).
 
 Hệ thống được thiết kế theo mô hình phân tán hoàn toàn (Distributed Mode) với các thành phần:
 - **Tầng Ứng dụng (Client/Data Ingestion):** Script tự động tương tác qua S3 API để nạp tải dữ liệu (Load Generation).
-- **Tầng Lưu trữ (Storage Layer):** Cụm 4 node MinIO chạy độc lập trên nền tảng Docker Container, được liên kết qua một mạng ảo (Virtual Network) để tạo thành một Single Storage Pool.
+- **Tầng Lưu trữ (Storage Layer):** Cụm 4 node MinIO chạy distributed mode trên nền tảng Docker Container, cùng tham gia một mạng ảo (Virtual Network) để tạo thành một Single Storage Pool.
 - **Tầng Giám sát (Monitoring - Tùy chọn):** Thu thập metrics về thông lượng (Throughput) và độ trễ (Latency).
 
 ## 3. Khởi chạy Nhanh (Quick Start)
@@ -67,8 +69,13 @@ Dự án được đóng gói hoàn toàn bằng Infrastructure as Code (IaC) th
 - Docker Compose >= 2.0
 
 **Lệnh khởi chạy:**
-```bash
-git clone <đường-dẫn-repo>
-cd minio-distributed-storage/infra
-docker-compose up -d
+```powershell
+git clone https://github.com/PhanThienLoc/cloud-native-minio-lab.git
+cd cloud-native-minio-lab
+Copy-Item .env.example .env
+docker compose --env-file .env -f infra/docker-compose.yml config --quiet
+docker compose --env-file .env -f infra/docker-compose.yml up -d
+docker compose --env-file .env -f infra/docker-compose.yml ps
 ```
+
+> Artifact sơ đồ PNG và nội dung kiến trúc tuần 1 sẽ được đồng bộ sau khi PR `fix/week1-finalization` được merge vào `develop`.

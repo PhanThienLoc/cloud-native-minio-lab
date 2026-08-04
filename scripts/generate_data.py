@@ -90,10 +90,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-
-#Chạy script (từ thư mục gốc của repo):
-#python scripts/generate_data.py
-
-#Cài dependencies:
-#python -m pip install -r scripts/requirements.txt

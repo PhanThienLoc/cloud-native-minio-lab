@@ -1,69 +1,81 @@
-# Week 2 Member 2 Connection Test
+# Kiểm Thử Kết Nối Tuần 2 Của Thành Viên 2
 
-## Phạm vi
+## Phạm Vi
 
-Tài liệu này ghi lại kết quả chạy `scripts/connect_test.py` để kiểm thử luồng upload/download qua Nginx Load Balancer và lấy số liệu latency cơ bản làm mốc so sánh cho Tuần 4.
+Tài liệu ghi lại quy trình kiểm tra `scripts/connect_test.py`. Script upload và
+download một file qua Nginx, đồng thời ghi nhận latency và bằng chứng toàn vẹn
+dữ liệu bằng SHA256.
 
-## Môi trường kiểm thử
+## Kiểm Tra Source
 
+- Script: `scripts/connect_test.py`
 - Endpoint: `http://localhost:9000`
-- Bucket kiểm thử: `demo-bucket`
-- File nguồn: `scripts/sample_data/user_data.csv`
-- File tải về: `scripts/sample_data/downloads/user_data.csv`
-- Cấu hình kết nối lấy từ `.env`
+- Credential: `.env`, không commit vào Git
+- Dữ liệu sinh ra: `scripts/sample_data/`, đã được ignore bởi Git
 
-## Lệnh đã chạy
+## Bằng Chứng Sinh Dataset
+
+Lệnh đã chạy:
 
 ```powershell
+python scripts/generate_data.py --log-size-mb 1 --csv-size-mb 1 --binary-count 1 --binary-size-kb 20
+```
+
+Kết quả: exit code `0`.
+
+- `system_logs.log`: `1066621` bytes
+- `user_data.csv`: `1064184` bytes
+- `dummy_images/image_dummy_1.bin`: `20480` bytes
+- File kiểm tra sau download: `1064184` bytes
+
+## Quy Trình Kiểm Thử Có Thể Tái Lập
+
+Chạy từ thư mục gốc repository:
+
+```powershell
+Copy-Item .env.example .env
+python -m pip install -r scripts/requirements.txt
+python scripts/generate_data.py --log-size-mb 1 --csv-size-mb 1 --binary-count 1 --binary-size-kb 20
 docker compose --env-file .env -f infra/docker-compose.yml up -d
 curl.exe -i http://localhost:9000/minio/health/live
-python scripts/connect_test.py
+python scripts/connect_test.py --file scripts/sample_data/user_data.csv --bucket demo-bucket
 ```
 
-## Kết quả runtime
+Các giá trị trong `.env` phải khớp với credential của cụm MinIO đang chạy.
+Script ưu tiên `AWS_ACCESS_KEY_ID` và `AWS_SECRET_ACCESS_KEY`; nếu không có,
+script dùng `MINIO_ROOT_USER` và `MINIO_ROOT_PASSWORD` cho lab hiện tại.
 
-Kết quả health check:
+## Bằng Chứng Runtime
 
-```text
-HTTP/1.1 200 OK
+Trạng thái: `Runtime verified` trên Docker Desktop.
+
+Các lệnh đã chạy:
+
+```powershell
+docker compose --env-file .env -f infra/docker-compose.yml up -d --force-recreate nginx
+curl.exe -i http://localhost:9000/minio/health/live
+python scripts/connect_test.py --file scripts/sample_data/user_data.csv --bucket demo-bucket
 ```
 
-Kết quả chạy script:
+Kết quả thực tế:
 
-```text
-[INFO] Cấu hình kết nối:
-[INFO]   endpoint_url = http://localhost:9000
-[INFO]   bucket       = demo-bucket
-[INFO]   source_file  = C:\Users\Admin\Desktop\New folder (9)\cloud-native-minio-lab\scripts\sample_data\user_data.csv
-[INFO]   object_name  = user_data.csv
-[INFO]   download_path = C:\Users\Admin\Desktop\New folder (9)\cloud-native-minio-lab\scripts\sample_data\downloads\user_data.csv
-[INFO] Bucket 'demo-bucket' chưa tồn tại, đang tạo mới...
-[SUCCESS] Đã tạo bucket 'demo-bucket'.
+- Health endpoint của Nginx: HTTP `200 OK`
+- Tạo bucket: PASS
+- Upload: PASS
+- Upload latency: `0.0666` giây
+- Download: PASS
+- Download latency: `0.0218` giây
+- Kích thước file nguồn: `1064184` bytes
+- Kích thước file download: `1064184` bytes
+- SHA256 của file nguồn và file download:
+  `1a991f5ce8f8df3657a61ebded83074c4d8f0cf8207dd32275df6767a2c69f20`
+- Exit code của script: `0`
 
---- BẮT ĐẦU UPLOAD: user_data.csv -> s3://demo-bucket/user_data.csv (1.01 MB) ---
-[SUCCESS] Upload thành công.
-[METRIC] Upload latency: 0.0668 giây
+Đường dẫn trong lệnh là đường dẫn tương đối; tài liệu không chứa đường dẫn cá
+nhân hoặc credential.
 
---- BẮT ĐẦU DOWNLOAD: s3://demo-bucket/user_data.csv -> ...\scripts\sample_data\downloads\user_data.csv (1.01 MB) ---
-[SUCCESS] Download thành công về: ...\scripts\sample_data\downloads\user_data.csv
-[METRIC] Download latency: 0.0235 giây
-[VERIFY] Kích thước khớp: 1064178 bytes
-```
+## Giới Hạn
 
-## Số liệu latency cơ bản
-
-- Upload latency: `0.0668` giây
-- Download latency: `0.0235` giây
-- Kích thước file: `1064178` bytes
-
-## Kết luận
-
-- Upload PASS.
-- Download PASS.
-- Kích thước file sau download khớp với file nguồn.
-- Script đã ghi nhận được latency cơ bản cho upload/download để dùng làm dữ liệu đối chiếu ở Tuần 4.
-
-## Hạn chế
-
-- Đây là benchmark nền với một file mẫu và một lần chạy.
-- Khi so sánh với Tuần 4 cần giữ nguyên endpoint, file nguồn và điều kiện môi trường càng nhiều càng tốt.
+- Một file và một lần chạy chỉ là baseline, chưa phải benchmark.
+- Không commit dataset hoặc file download.
+- Bằng chứng Docker trên một máy không chứng minh hệ thống đã production-ready.

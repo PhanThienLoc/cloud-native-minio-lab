@@ -62,4 +62,3 @@ Khi hoàn thành Chương 1 và toàn bộ nội dung dự án, các kết quả
 - **Báo cáo kiểm tra tính toàn vẹn dữ liệu**: Kết quả đối sánh checksum (MD5/SHA256) xác minh dữ liệu tải về hoàn toàn trùng khớp với dữ liệu gốc ban đầu, chứng minh tính tin cậy của hệ thống.
 - **Kết quả kiểm thử khả năng chịu lỗi (Fault Tolerance Test)**: Kịch bản giả lập sự cố bằng cách cưỡng chế dừng 1 hoặc 2 node MinIO bất kỳ trong cụm, chứng minh hệ thống vẫn tiếp tục phục vụ các yêu cầu đọc/ghi dữ liệu từ client mà không làm gián đoạn dịch vụ hay mất mát dữ liệu.
 - **Bộ số liệu và biểu đồ đánh giá hiệu năng**: Thu thập chi tiết các chỉ số hoạt động như thời gian phản hồi (latency), tốc độ truy xuất dữ liệu (throughput MB/s) và mức độ tiêu tốn tài nguyên (CPU, RAM, Disk I/O) trong hai trạng thái: hoạt động bình thường và khi có node gặp sự cố hỏng hóc.
-

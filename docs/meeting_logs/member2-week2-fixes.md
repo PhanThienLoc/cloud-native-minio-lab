@@ -66,6 +66,38 @@ File `.env` thật tiếp tục bị ignore. Chỉ `.env.example` được phép
 - `Not executed`: chưa chạy benchmark nhiều lần hoặc failure test trong phạm
   vi evidence của connect test này.
 
+## Fix Bổ Sung: Mất Kết Nối Nginx
+
+Review bổ sung phát hiện `get_s3_client()` chỉ khởi tạo boto3 client, chưa gửi
+request tới Nginx. Request đầu tiên thực sự xảy ra ở `head_bucket()` trong
+`ensure_bucket_exists()`.
+
+Trước khi sửa, `ensure_bucket_exists()` nằm ngoài `try` của `upload_file()`. Nếu
+Nginx tắt, `EndpointConnectionError` có thể thoát ra ngoài và in traceback.
+
+Đã sửa:
+
+- Đưa `get_s3_client()` và `ensure_bucket_exists()` vào cùng khối `try` của
+  `upload_file()`.
+- Bắt `BotoCoreError`, `ClientError`, `EndpointConnectionError` và
+  `RuntimeError`.
+- Khi không kết nối được, script trả về `False` và in:
+  `[ERROR] Upload failed: ...`.
+- Đưa khởi tạo client của `download_file()` vào khối `try` tương tự để xử lý
+  lỗi nhất quán.
+
+Test lỗi cần chạy sau khi bật môi trường:
+
+```powershell
+docker compose --env-file .env -f infra/docker-compose.yml stop nginx
+python scripts/connect_test.py --file scripts/sample_data/user_data.csv --bucket demo-bucket
+docker compose --env-file .env -f infra/docker-compose.yml start nginx
+```
+
+Kết quả mong đợi là script trả exit code `1` và in thông báo lỗi rõ ràng,
+không in traceback. Không tuyên bố test này là `Runtime verified` cho đến khi
+đã chạy thật.
+
 ## Lệnh Cần Chạy Sau Khi Chuẩn Bị Môi Trường
 
 ```powershell

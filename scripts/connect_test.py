@@ -84,8 +84,12 @@ def upload_file(file_path: str | Path, bucket_name: str, object_name: str | None
         return False
 
     object_name = object_name or local_path.name
-    s3_client = get_s3_client()
-    ensure_bucket_exists(s3_client, bucket_name)
+    try:
+        s3_client = get_s3_client()
+        ensure_bucket_exists(s3_client, bucket_name)
+    except (BotoCoreError, ClientError, EndpointConnectionError, RuntimeError) as error:
+        print(f"[ERROR] Upload failed: {_error_message(error)}")
+        return False
 
     file_size = local_path.stat().st_size
     print(
@@ -114,9 +118,9 @@ def upload_file(file_path: str | Path, bucket_name: str, object_name: str | None
 def download_file(object_name: str, file_path: str | Path, bucket_name: str) -> bool:
     download_path = Path(file_path)
     download_path.parent.mkdir(parents=True, exist_ok=True)
-    s3_client = get_s3_client()
 
     try:
+        s3_client = get_s3_client()
         response = s3_client.head_object(Bucket=bucket_name, Key=object_name)
         file_size = int(response.get("ContentLength", 0))
         print(
@@ -136,7 +140,7 @@ def download_file(object_name: str, file_path: str | Path, bucket_name: str) -> 
         print(f"[SUCCESS] Download completed: {download_path}")
         print(f"[METRIC] Download latency: {latency:.4f} seconds")
         return True
-    except (BotoCoreError, ClientError, EndpointConnectionError) as error:
+    except (BotoCoreError, ClientError, EndpointConnectionError, RuntimeError) as error:
         print(f"[ERROR] Download failed: {_error_message(error)}")
         return False
 

@@ -154,17 +154,19 @@ Trạng thái hiện tại đã runtime-verified: 4 node, 8 drive, một pool, E
 Source hiện tại:
 
 - scripts/data_ingestion.py mới tạo file partition mẫu, chưa upload S3.
-- connect_test.py chưa có trong branch tích hợp hiện tại.
+- scripts/connect_test.py đã có và dùng boto3 + python-dotenv để upload/download qua Nginx Load Balancer.
 - scripts/mc_setup.sh mới tạo một bucket mặc định và cần Member 3 review trước khi dùng như deliverable 3 bucket.
 
-Sau khi script được hoàn thiện, flow dự kiến là:
+Flow kiểm thử hiện tại:
 
 ~~~powershell
-python scripts\connect_test.py
+python scripts\connect_test.py --file scripts\sample_data\user_data.csv --bucket demo-bucket
 bash scripts/mc_setup.sh
 ~~~
 
 Endpoint và credential phải lấy từ environment; không thêm secret vào script hoặc README.
+
+Script kết nối ghi lại latency upload/download cơ bản để làm mốc so sánh cho Tuần 4.
 
 ## 7. Tuần 4: observability và load testing
 

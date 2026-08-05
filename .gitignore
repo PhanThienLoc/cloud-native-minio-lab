@@ -1,6 +1,16 @@
 .env
+.env.*
+!.env.example
 __pycache__/
 *.pyc
 .DS_Store
 .vscode/
 scripts/sample_data/
+.venv/
+
+# Local Codex project context and routing files.
+.agents/
+.codex/
+AGENTS.md
+project-brain.md
+docs/codex-usage.md

@@ -24,10 +24,28 @@ Yêu cầu:
 - Python 3 và pip cho script Python.
 - PowerShell trên Windows hoặc Bash trên Linux/macOS.
 
-Từ repository root:
+### Clone repository lần đầu
 
 ~~~powershell
-cd D:\Cloud\cloud-native-minio-lab
+git clone https://github.com/PhanThienLoc/cloud-native-minio-lab.git
+Set-Location cloud-native-minio-lab
+git switch develop
+git pull origin develop
+~~~
+
+Nếu repository đã được clone, chạy từ thư mục gốc:
+
+~~~powershell
+Set-Location <REPO_ROOT>
+git switch develop
+git pull origin develop
+~~~
+
+Trên Linux/macOS:
+
+~~~bash
+git clone https://github.com/PhanThienLoc/cloud-native-minio-lab.git
+cd cloud-native-minio-lab
 git switch develop
 git pull origin develop
 ~~~
@@ -37,6 +55,10 @@ Tạo credential local một lần:
 ~~~powershell
 if (!(Test-Path .env)) { Copy-Item .env.example .env }
 ~~~
+
+Mở `.env` và bảo đảm `MINIO_ROOT_USER` cùng `MINIO_ROOT_PASSWORD` phù hợp với
+cụm mới. Nếu dùng các volume MinIO đã tồn tại, phải giữ đúng credential đã dùng
+khi khởi tạo volume đó.
 
 Không commit .env, credential thật hoặc dataset sinh ra.
 
@@ -80,7 +102,15 @@ Tạo môi trường Python:
 ~~~powershell
 python -m venv .venv
 .venv\Scripts\Activate.ps1
-pip install -r scripts\requirements.txt
+python -m pip install -r scripts\requirements.txt
+~~~
+
+Trên Linux/macOS:
+
+~~~bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r scripts/requirements.txt
 ~~~
 
 Chạy test nhỏ:
@@ -149,7 +179,17 @@ docker run --rm --network minio-net --env-file .env --entrypoint /bin/sh minio/m
 
 Trạng thái hiện tại đã runtime-verified: 4 node, 8 drive, một pool, EC:4, health HTTP 200 và bucket smoke test thành công.
 
-## 6. Tuần 3: data ingestion và IAM
+## 6. Tuần 3: resource limits, data ingestion và IAM
+
+Compose giới hạn tài nguyên cho lab như sau:
+
+- Mỗi MinIO node: tối đa `1.0 CPU` và `1 GiB RAM`.
+- Nginx: tối đa `0.50 CPU` và `256 MiB RAM`.
+
+Đây là giới hạn tối đa cho Docker Desktop, không phải cấu hình production.
+Nếu Docker Desktop được cấp ít tài nguyên hơn, cần giảm workload hoặc điều
+chỉnh limits sau khi đo thực tế; không kết luận hiệu năng nếu chưa ghi lại
+CPU/RAM của host.
 
 Source hiện tại:
 
@@ -157,12 +197,22 @@ Source hiện tại:
 - scripts/connect_test.py đã có và dùng boto3 + python-dotenv để upload/download qua Nginx Load Balancer.
 - scripts/mc_setup.sh mới tạo một bucket mặc định và cần Member 3 review trước khi dùng như deliverable 3 bucket.
 
-Flow kiểm thử hiện tại:
+Flow kiểm thử hiện tại. Dataset cần được tạo lại nếu đã bị xóa sau validation
+Tuần 1:
 
 ~~~powershell
-python scripts\connect_test.py --file scripts\sample_data\user_data.csv --bucket demo-bucket
-bash scripts/mc_setup.sh
+python scripts\generate_data.py --output-dir .\scripts\sample_data_validation --log-size-mb 1 --csv-size-mb 1 --binary-count 1 --binary-size-kb 20
+python scripts\connect_test.py `
+  --file .\scripts\sample_data_validation\user_data.csv `
+  --download-path .\scripts\sample_data_validation\downloads\user_data.csv `
+  --bucket demo-bucket
+Remove-Item -Recurse -Force .\scripts\sample_data_validation
 ~~~
+
+`mc_setup.sh` hiện chỉ là script đang chờ Member 3 hoàn thiện và review; không
+dùng nó để kết luận deliverable ba bucket đã đạt. Trong thời gian chờ, dùng các
+lệnh `docker run ... minio/mc` ở mục 5.1 để kiểm tra `mc alias set`, `mc ls` và
+tạo bucket.
 
 Endpoint và credential phải lấy từ environment; không thêm secret vào script hoặc README.
 

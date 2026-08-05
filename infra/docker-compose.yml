@@ -17,6 +17,11 @@ services:
       retries: 10
       start_period: 20s
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
 
   minio2:
     image: minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
@@ -36,6 +41,11 @@ services:
       retries: 10
       start_period: 20s
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
 
   minio3:
     image: minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
@@ -55,6 +65,11 @@ services:
       retries: 10
       start_period: 20s
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
 
   minio4:
     image: minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
@@ -74,6 +89,11 @@ services:
       retries: 10
       start_period: 20s
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
 
   nginx:
     image: nginx:1.27-alpine
@@ -99,6 +119,11 @@ services:
       retries: 10
       start_period: 10s
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 256M
 
   prometheus:
     image: prom/prometheus:v2.55.1

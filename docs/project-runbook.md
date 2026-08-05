@@ -149,7 +149,17 @@ docker run --rm --network minio-net --env-file .env --entrypoint /bin/sh minio/m
 
 Trạng thái hiện tại đã runtime-verified: 4 node, 8 drive, một pool, EC:4, health HTTP 200 và bucket smoke test thành công.
 
-## 6. Tuần 3: data ingestion và IAM
+## 6. Tuần 3: resource limits, data ingestion và IAM
+
+Compose giới hạn tài nguyên cho lab như sau:
+
+- Mỗi MinIO node: tối đa `1.0 CPU` và `1 GiB RAM`.
+- Nginx: tối đa `0.50 CPU` và `256 MiB RAM`.
+
+Đây là giới hạn tối đa cho Docker Desktop, không phải cấu hình production.
+Nếu Docker Desktop được cấp ít tài nguyên hơn, cần giảm workload hoặc điều
+chỉnh limits sau khi đo thực tế; không kết luận hiệu năng nếu chưa ghi lại
+CPU/RAM của host.
 
 Source hiện tại:
 

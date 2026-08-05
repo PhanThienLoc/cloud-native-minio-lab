@@ -76,3 +76,21 @@ docker compose --env-file .env -f infra/docker-compose.yml config --quiet
 docker compose --env-file .env -f infra/docker-compose.yml up -d
 docker compose --env-file .env -f infra/docker-compose.yml ps
 ```
+## 4. Tạo dữ liệu mẫu
+
+Sau khi hệ thống được khởi chạy, có thể sử dụng các script trong thư mục `scripts/` để tạo dữ liệu mẫu phục vụ kiểm thử.
+
+Ví dụ:
+
+```bash
+python scripts/generate_data.py
+```
+
+Hoặc sử dụng các script khác trong thư mục `scripts/` theo từng mục đích kiểm thử.
+
+---
+
+## 5. Báo cáo
+
+- Chương 1: `docs/reports/chapter-1-overview.md`
+- Chương 2: `docs/reports/chapter-2-theoretical-background.md`

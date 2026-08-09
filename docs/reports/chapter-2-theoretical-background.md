@@ -91,9 +91,35 @@ Hình 2.1 minh họa kiến trúc tổng thể của hệ thống lưu trữ ph�
 
 Bốn node MinIO được kết nối với nhau thông qua mạng Docker (`minio-net`) để tạo thành một cụm lưu trữ phân tán. Mỗi node quản lý dữ liệu của mình và phối hợp với các node còn lại trong quá trình lưu trữ, truy xuất và bảo vệ dữ liệu. Trong các giai đoạn tiếp theo của dự án, hệ thống giám sát sẽ được bổ sung nhằm thu thập các chỉ số về hiệu năng và trạng thái hoạt động của cụm.
 Mỗi node MinIO được gắn với hai volume lưu trữ nhằm phục vụ cơ chế phân phối dữ liệu và nâng cao khả năng chịu lỗi của hệ thống.
-Kiến trúc tổng thể hệ thống lưu trữ phân tán bằng MinIO
-![Hình 2.1](../architecture/week1-minio-architecture1.png)
+### 7.1. Mô hình triển khai 4 node MinIO với 8 drives
 
+Trong mô hình thử nghiệm, hệ thống lưu trữ phân tán được triển khai bằng MinIO với 4 node. Mỗi node được cấu hình sử dụng 2 volume lưu trữ. Vì vậy, toàn bộ cụm có tổng cộng:
+
+**4 node × 2 volume/node = 8 drives logic**
+
+Trong phạm vi mô hình này, mỗi volume Docker được xem như một drive logic của MinIO. Cần phân biệt rõ rằng đây là các drive logic được mô phỏng trong môi trường Docker, không phải 8 ổ đĩa vật lý độc lập.
+
+#### a. Vai trò của 4 node và 8 drives
+
+Bốn node MinIO cùng tham gia vào một cụm lưu trữ phân tán. Mỗi node cung cấp hai volume cho MinIO, do đó hệ thống có tổng cộng tám vị trí lưu trữ logic.
+
+Mô hình có thể biểu diễn như sau:
+
+```text
+                 MinIO Distributed Cluster
+                         │
+        ┌────────────────┼────────────────┐
+        │                │                │
+      Node 1           Node 2           Node 3           Node 4
+        │                │                │                │
+    ┌───┴───┐        ┌───┴───┐        ┌───┴───┐        ┌───┴───┐
+    │       │        │       │        │       │        │       │
+ Volume 1 Volume 2 Volume 1 Volume 2 Volume 1 Volume 2 Volume 1 Volume 2
+    │       │        │       │        │       │        │       │
+    └───────┴────────┴───────┴────────┴───────┴────────┴───────┘
+                         8 drives logic
+Kiến trúc tổng thể hệ thống lưu trữ phân tán bằng MinIO
+![Hình 2.x. Kiến trúc tổng thể hệ thống lưu trữ phân tán bằng MinIO](../architecture/week1-minio-architecture.png)
 ## Tài liệu tham khảo
 
 1. MinIO Documentation: https://min.io/docs/

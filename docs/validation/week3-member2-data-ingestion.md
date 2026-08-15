@@ -20,15 +20,23 @@ cho lab. Không commit `.env` hoặc credential thật.
 
 ## Chuẩn bị dataset
 
+Xóa dataset validation cũ để kết quả không phụ thuộc các lần chạy trước, sau đó
+tạo đúng một file log, một file CSV và hai file binary:
+
 ```powershell
+Remove-Item -Recurse -Force scripts/sample_data_validation `
+  -ErrorAction SilentlyContinue
+
 python scripts/generate_data.py `
+  --output-dir scripts/sample_data_validation `
   --log-size-mb 1 `
   --csv-size-mb 1 `
   --binary-count 2 `
   --binary-size-kb 20
 ```
 
-Dataset được tạo trong `scripts/sample_data/` và bị Git ignore.
+Dataset validation chỉ phục vụ runtime test và phải được xóa sau khi hoàn tất,
+không commit vào Git.
 
 ## Kiểm tra source
 
@@ -73,15 +81,21 @@ Chạy với ngày cố định để kết quả có thể tái lập:
 
 ```powershell
 python scripts/data_ingestion.py `
-  --source-dir scripts/sample_data `
+  --source-dir scripts/sample_data_validation `
   --bucket raw-data `
-  --partition-date 2026-08-05
+  --partition-date 2026-08-16
 ```
 
-Dùng object key được in trong log để kiểm tra metadata, ví dụ:
+Dùng MinIO Client trong container để alias luôn được tạo lại và không phụ thuộc
+việc máy local đã cài hoặc cấu hình `mc`:
 
 ```powershell
-mc stat myminio/raw-data/csv/year=2026/month=08/day=05/user_data.csv
+docker run --rm `
+  --network minio-net `
+  --env-file .env `
+  --entrypoint /bin/sh `
+  minio/mc:latest `
+  -c 'mc alias set myminio http://nginx:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" && mc stat myminio/raw-data/csv/year=2026/month=08/day=16/user_data.csv'
 ```
 
 ## Kết quả runtime
@@ -97,43 +111,67 @@ Lệnh kiểm thử:
 
 ```powershell
 python scripts/data_ingestion.py `
-  --source-dir scripts/sample_data `
+  --source-dir scripts/sample_data_validation `
   --bucket raw-data `
-  --partition-date 2026-08-05
+  --partition-date 2026-08-16
 ```
 
 Kết quả quan sát được:
 
 - Exit code: `0`.
-- Upload thành công: `102` file.
+- Upload thành công: `4` file.
 - Upload thất bại: `0` file.
-- Tổng dữ liệu: `22,242,053` byte.
-- Thời gian: `2.8116` giây.
-- Throughput quan sát: `7.54 MB/s`.
-- Object log: `logs/year=2026/month=08/day=05/system_logs.log`.
-- Object CSV: `csv/year=2026/month=08/day=05/user_data.csv`.
+- Tổng dữ liệu: `2,171,856` byte.
+- Thời gian: `0.3827` giây.
+- Throughput quan sát: `5.41 MB/s`.
+- Object log: `logs/year=2026/month=08/day=16/system_logs.log`.
+- Object CSV: `csv/year=2026/month=08/day=16/user_data.csv`.
 - Object binary nằm dưới
-  `binary/year=2026/month=08/day=05/dummy_images/`.
+  `binary/year=2026/month=08/day=16/dummy_images/`.
 
-Thư mục nguồn đã chứa dataset được tạo từ các lần kiểm thử trước, vì vậy pipeline
-quét và upload `102` file thay vì chỉ các file mới của lệnh tạo dataset nhỏ. Đây
-là bằng chứng cho chức năng quét đệ quy, không phải kết quả benchmark chuẩn hóa.
-
-Lệnh `mc stat` xác nhận object CSV có kích thước khoảng `1.0 MiB` và chứa các
-metadata sau:
+Lệnh `mc stat` chạy qua container xác nhận object CSV có kích thước khoảng
+`1.0 MiB` và chứa các metadata sau:
 
 - `source`: `sensor-01`;
 - `data-type`: `csv`;
 - `content-type-detected`: `application/vnd.ms-excel`;
 - `ingested-at`: thời điểm upload theo UTC.
 
-Preflight thiếu bucket cũng đã được kiểm tra: `HeadBucket` trả `404` và pipeline
-kết thúc với exit code `1` thay vì tiếp tục upload. Khi dừng Nginx, log runtime ghi
-nhận hai cảnh báo `Retrying __main__.check_bucket`, tương ứng với việc chuyển sang
-lần thử thứ hai và thứ ba. Lần kiểm thử được dừng thủ công bằng `Ctrl+C` trong lần
-thử cuối nên không dùng traceback đó làm bằng chứng xử lý lỗi cuối cùng. Sau khi
-khởi động lại Nginx, endpoint health trả HTTP `200 OK` và container trở về trạng
-thái `healthy`. Việc phục hồi ngay trong lúc một tiến trình ingestion còn chạy chưa
-được kiểm thử.
+## Kiểm thử retry exhaust
+
+Nginx được dừng trước khi chạy lại pipeline với cùng dataset validation:
+
+```powershell
+docker compose --env-file .env -f infra/docker-compose.yml stop nginx
+
+python scripts/data_ingestion.py `
+  --source-dir scripts/sample_data_validation `
+  --bucket raw-data `
+  --partition-date 2026-08-16
+
+$LASTEXITCODE
+```
+
+Kết quả runtime:
+
+- Hai cảnh báo `Retrying __main__.check_bucket` xuất hiện trước lần thử thứ hai và
+  thứ ba.
+- Sau lần thử thứ ba, pipeline in `Ingestion preflight failed`.
+- Exit code: `1`.
+- Không có traceback không được xử lý.
+
+Nginx được khởi động lại sau kiểm thử. Endpoint health trả HTTP `200 OK` và
+container trở về trạng thái `healthy`:
+
+```powershell
+docker compose --env-file .env -f infra/docker-compose.yml start nginx
+curl.exe -i http://localhost:9000/minio/health/live
+```
+
+Xóa dataset validation cục bộ sau khi thu thập evidence:
+
+```powershell
+Remove-Item -Recurse -Force scripts/sample_data_validation
+```
 
 Không dùng số liệu của một lần chạy làm kết quả benchmark Tuần 4.

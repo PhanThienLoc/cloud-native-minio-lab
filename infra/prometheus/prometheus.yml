@@ -1,7 +1,44 @@
 global:
   scrape_interval: 15s
+  evaluation_interval: 15s
 
 scrape_configs:
   - job_name: prometheus
     static_configs:
       - targets: ["prometheus:9090"]
+
+  # Public auth is acceptable only because MinIO port 9000 is not published
+  # directly by any node; these endpoints are reachable from minio-net.
+  - job_name: minio-cluster
+    metrics_path: /minio/v2/metrics/cluster
+    scheme: http
+    static_configs:
+      - targets:
+          - minio1:9000
+          - minio2:9000
+          - minio3:9000
+          - minio4:9000
+
+  # Request and node-specific metrics are not all present on the cluster
+  # endpoint, so scrape each node endpoint as a separate job.
+  - job_name: minio-node
+    metrics_path: /minio/v2/metrics/node
+    scheme: http
+    static_configs:
+      - targets:
+          - minio1:9000
+          - minio2:9000
+          - minio3:9000
+          - minio4:9000
+
+  # Metrics v3 exposes request counters with an API operation label, which is
+  # required for the GET/PUT/DELETE request-rate dashboard panel.
+  - job_name: minio-api
+    metrics_path: /minio/metrics/v3/api/requests
+    scheme: http
+    static_configs:
+      - targets:
+          - minio1:9000
+          - minio2:9000
+          - minio3:9000
+          - minio4:9000

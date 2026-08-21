@@ -6,6 +6,10 @@
 - Commit được review: `7d0dca9`.
 - Chế độ: `Review only`; không sửa `/scripts`.
 
+> Cập nhật 21/08/2026: các finding bên dưới mô tả branch gốc. Chúng đã được xử
+> lý và runtime-verify trên `fix/member2-week4-load-generator`. Xem
+> `docs/validation/week4-member2-load-test.md`.
+
 ## Kết luận
 
 Branch đã có multi-threading, CLI arguments, dữ liệu sinh trong RAM, latency
@@ -59,3 +63,13 @@ endpoint/topology, host CPU/RAM/storage và thời gian dạng ISO 8601. Vì v�
 - Chạy smoke test 100 object trước khi chạy 5.000 object.
 - Evidence ghi đủ topology, commit và host resources.
 - Quan sát Grafana trong lúc load để xác nhận Throughput và Request Rate thay đổi.
+
+## Trạng thái branch fix
+
+- Không còn fallback credential hardcode.
+- Không còn dependency `numpy`.
+- Retry chỉ áp dụng cho lỗi transient và tối đa ba attempt.
+- Smoke test 100 object: `100/100` thành công.
+- Full load 5.000 object: `5.000/5.000` thành công.
+- Grafana/Prometheus metrics và resource usage đã được runtime-verify.
+- Chưa commit, push hoặc merge.

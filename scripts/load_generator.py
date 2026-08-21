@@ -1,192 +1,658 @@
+"""Generate concurrent S3 upload load and write a reproducible JSON report."""
+
+from __future__ import annotations
+
 import argparse
-import io
 import json
 import logging
+import math
 import os
+import platform
 import re
+import subprocess
+import threading
 import time
 import uuid
-import numpy as np
+from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from statistics import fmean
+from typing import Any, Callable, TypeVar
+
 import boto3
 from botocore.client import Config
-from botocore.exceptions import ClientError, EndpointConnectionError
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from botocore.exceptions import (
+    ClientError,
+    ConnectionClosedError,
+    ConnectTimeoutError,
+    EndpointConnectionError,
+    ReadTimeoutError,
+)
 from dotenv import load_dotenv
 
-# Tải biến môi trường từ .env
-load_dotenv()
+MAX_ATTEMPTS = 3
+MAX_FILES = 20_000
+MAX_THREADS = 128
+MAX_FILE_SIZE_BYTES = 1024**3
+MAX_TOTAL_BYTES = 10 * 1024**3
+TRANSIENT_S3_CODES = {
+    "InternalError",
+    "RequestTimeout",
+    "RequestTimeoutException",
+    "ServiceUnavailable",
+    "SlowDown",
+}
 
-MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "http://localhost:9000")
-MINIO_ROOT_USER = os.getenv("MINIO_ROOT_USER", "minioadmin")
-MINIO_ROOT_PASSWORD = os.getenv("MINIO_ROOT_PASSWORD", "minioadmin")
-
-# Thiết lập logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.FileHandler("load_generator.log"),
-        logging.StreamHandler()
-    ]
 )
 logger = logging.getLogger(__name__)
+thread_state = threading.local()
+T = TypeVar("T")
 
-def parse_size(size_str: str) -> int:
-    """Chuyển đổi tham số kích thước (vd: 1MB, 512KB, 100B) sang số byte."""
-    match = re.match(r"^(\d+(?:\.\d+)?)\s*([a-zA-Z]+)?$", size_str.strip())
+
+@dataclass(frozen=True)
+class S3Settings:
+    """Connection settings loaded from environment variables."""
+
+    endpoint_url: str
+    access_key: str = field(repr=False)
+    secret_key: str = field(repr=False)
+    credential_source: str
+
+
+class ConfigurationError(ValueError):
+    """Raised when required runtime configuration is missing."""
+
+
+class OperationFailed(RuntimeError):
+    """Raised after a non-retryable error or exhausted transient retries."""
+
+    def __init__(self, message: str, attempts: int) -> None:
+        super().__init__(message)
+        self.attempts = attempts
+
+
+def parse_size(size_text: str) -> int:
+    """Convert a size such as 1MB or 512KB to bytes."""
+    match = re.fullmatch(
+        r"(\d+(?:\.\d+)?)\s*([a-zA-Z]+)?",
+        size_text.strip(),
+    )
     if not match:
-        raise ValueError(f"Định dạng dung lượng không hợp lệ: {size_str}")
-    value, unit = float(match.group(1)), (match.group(2) or "B").upper()
-    units = {"B": 1, "KB": 1024, "MB": 1024**2, "GB": 1024**3}
-    if unit not in units:
-        raise ValueError(f"Đơn vị không hỗ trợ: {unit}. Chọn B, KB, MB, hoặc GB.")
-    return int(value * units[unit])
+        raise ValueError(f"Invalid size: {size_text}")
 
-def get_s3_client(max_connections: int = 100):
-    """Khởi tạo S3 client tối ưu Connection Pool cho đa luồng."""
-    return boto3.client(
-        "s3",
-        endpoint_url=MINIO_ENDPOINT,
-        aws_access_key_id=MINIO_ROOT_USER,
-        aws_secret_access_key=MINIO_ROOT_PASSWORD,
-        config=Config(
-            signature_version="s3v4",
-            max_pool_connections=max_connections,
-            connect_timeout=10,
-            read_timeout=30
+    value = float(match.group(1))
+    unit = (match.group(2) or "B").upper()
+    units = {
+        "B": 1,
+        "KB": 1024,
+        "MB": 1024**2,
+        "GB": 1024**3,
+    }
+    if unit not in units:
+        raise ValueError(f"Unsupported unit: {unit}. Use B, KB, MB, or GB.")
+
+    size_bytes = int(value * units[unit])
+    if size_bytes <= 0:
+        raise ValueError("File size must be greater than zero.")
+    if size_bytes > MAX_FILE_SIZE_BYTES:
+        raise ValueError("File size must not exceed 1GB for this laptop lab.")
+    return size_bytes
+
+
+def bounded_positive_int(maximum: int) -> Callable[[str], int]:
+    """Build an argparse validator for a positive bounded integer."""
+
+    def parse(value: str) -> int:
+        try:
+            number = int(value)
+        except ValueError as error:
+            raise argparse.ArgumentTypeError("Expected an integer.") from error
+        if number <= 0:
+            raise argparse.ArgumentTypeError("Value must be greater than zero.")
+        if number > maximum:
+            raise argparse.ArgumentTypeError(
+                f"Value must not exceed {maximum:,} for this laptop lab."
+            )
+        return number
+
+    return parse
+
+
+def size_argument(value: str) -> int:
+    """Validate a file-size CLI argument."""
+    try:
+        return parse_size(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(str(error)) from error
+
+
+def bucket_argument(value: str) -> str:
+    """Validate the subset of S3 bucket naming rules used by this lab."""
+    bucket = value.strip()
+    if not re.fullmatch(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]", bucket):
+        raise argparse.ArgumentTypeError(
+            "Bucket must contain 3-63 lowercase letters, digits, dots, or hyphens."
         )
+    if ".." in bucket:
+        raise argparse.ArgumentTypeError(
+            "Bucket name must not contain consecutive dots."
+        )
+    return bucket
+
+
+def load_settings() -> S3Settings:
+    """Load endpoint and one complete credential pair without hardcoded secrets."""
+    endpoint_url = os.getenv("ENDPOINT_URL", "http://localhost:9000").strip()
+    if not endpoint_url:
+        raise ConfigurationError("ENDPOINT_URL must not be empty.")
+
+    app_access_key = os.getenv("AWS_ACCESS_KEY_ID", "").strip()
+    app_secret_key = os.getenv("AWS_SECRET_ACCESS_KEY", "").strip()
+    if app_access_key or app_secret_key:
+        if not app_access_key or not app_secret_key:
+            raise ConfigurationError(
+                "AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY must be set together."
+            )
+        return S3Settings(
+            endpoint_url=endpoint_url,
+            access_key=app_access_key,
+            secret_key=app_secret_key,
+            credential_source="application",
+        )
+
+    root_access_key = os.getenv("MINIO_ROOT_USER", "").strip()
+    root_secret_key = os.getenv("MINIO_ROOT_PASSWORD", "").strip()
+    if not root_access_key or not root_secret_key:
+        raise ConfigurationError(
+            "Set application credentials or both MinIO root variables in .env."
+        )
+    return S3Settings(
+        endpoint_url=endpoint_url,
+        access_key=root_access_key,
+        secret_key=root_secret_key,
+        credential_source="root-lab-fallback",
     )
 
-def upload_worker(bucket_name: str, file_size_bytes: int, max_retries: int = 3) -> dict:
-    """Worker sinh dữ liệu trực tiếp trong RAM và upload kèm cơ chế Retry Exponential Backoff."""
-    client = get_s3_client()
-    object_key = f"load-test/year=2026/month=08/load_{uuid.uuid4().hex}.bin"
-    dummy_payload = os.urandom(file_size_bytes)
-    
+
+def build_s3_client(settings: S3Settings):
+    """Create a client with SDK retries disabled so this script owns retry count."""
+    return boto3.client(
+        "s3",
+        endpoint_url=settings.endpoint_url,
+        aws_access_key_id=settings.access_key,
+        aws_secret_access_key=settings.secret_key,
+        config=Config(
+            signature_version="s3v4",
+            connect_timeout=3,
+            read_timeout=30,
+            max_pool_connections=2,
+            retries={"mode": "standard", "total_max_attempts": 1},
+        ),
+    )
+
+
+def get_thread_client(settings: S3Settings):
+    """Reuse one boto3 client per worker thread."""
+    client = getattr(thread_state, "s3_client", None)
+    if client is None:
+        client = build_s3_client(settings)
+        thread_state.s3_client = client
+    return client
+
+
+def is_transient_error(error: Exception) -> bool:
+    """Return true only for connection failures, timeouts, throttling, or S3 5xx."""
+    if isinstance(
+        error,
+        (
+            ConnectionClosedError,
+            ConnectTimeoutError,
+            EndpointConnectionError,
+            ReadTimeoutError,
+        ),
+    ):
+        return True
+    if not isinstance(error, ClientError):
+        return False
+
+    metadata = error.response.get("ResponseMetadata", {})
+    status_code = int(metadata.get("HTTPStatusCode", 0))
+    error_code = error.response.get("Error", {}).get("Code", "")
+    return (
+        status_code >= 500
+        or status_code in {408, 429}
+        or error_code in TRANSIENT_S3_CODES
+    )
+
+
+def run_with_retry(
+    operation: Callable[[], T],
+    description: str,
+) -> tuple[T, int]:
+    """Run an S3 operation at most three times for transient failures."""
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        try:
+            return operation(), attempt
+        except Exception as error:
+            if not is_transient_error(error):
+                raise OperationFailed(
+                    f"{description} failed without retry: {error}",
+                    attempts=attempt,
+                ) from error
+            if attempt == MAX_ATTEMPTS:
+                raise OperationFailed(
+                    f"{description} failed after {MAX_ATTEMPTS} attempts: {error}",
+                    attempts=attempt,
+                ) from error
+
+            delay_seconds = 0.5 * (2 ** (attempt - 1))
+            logger.warning(
+                "%s failed on attempt %d/%d; retrying in %.1fs: %s",
+                description,
+                attempt,
+                MAX_ATTEMPTS,
+                delay_seconds,
+                error,
+            )
+            time.sleep(delay_seconds)
+
+    raise AssertionError("Retry loop ended unexpectedly.")
+
+
+def preflight(settings: S3Settings, bucket_name: str) -> None:
+    """Verify endpoint, credentials, and destination bucket before scheduling load."""
+    client = build_s3_client(settings)
+    run_with_retry(
+        lambda: client.head_bucket(Bucket=bucket_name),
+        f"Preflight for bucket '{bucket_name}'",
+    )
+
+
+def upload_worker(
+    settings: S3Settings,
+    bucket_name: str,
+    object_prefix: str,
+    object_index: int,
+    file_size_bytes: int,
+) -> dict[str, Any]:
+    """Generate one in-memory object and upload it with bounded retries."""
+    object_key = (
+        f"{object_prefix}/object-{object_index:06d}-{uuid.uuid4().hex}.bin"
+    )
     start_time = time.perf_counter()
     attempts = 0
-    success = False
-    last_error = ""
 
-    while attempts < max_retries and not success:
-        attempts += 1
-        try:
-            client.put_object(
+    try:
+        payload = os.urandom(file_size_bytes)
+        client = get_thread_client(settings)
+        _, attempts = run_with_retry(
+            lambda: client.put_object(
                 Bucket=bucket_name,
                 Key=object_key,
-                Body=io.BytesIO(dummy_payload),
-                Metadata={"generated-by": "load_generator", "size": str(file_size_bytes)}
-            )
-            success = True
-        except (ClientError, EndpointConnectionError, Exception) as err:
-            last_error = str(err)
-            if attempts < max_retries:
-                backoff_delay = 0.5 * (2 ** (attempts - 1))
-                logger.warning(f"Thử lại request ({attempts}/{max_retries}) sau {backoff_delay}s. Lỗi: {last_error}")
-                time.sleep(backoff_delay)
-            else:
-                logger.error(f"Thất bại vĩnh viễn Object {object_key} sau {max_retries} lần thử: {last_error}")
+                Body=payload,
+                Metadata={
+                    "generated-by": "load-generator",
+                    "object-index": str(object_index),
+                },
+            ),
+            f"Upload object {object_index}",
+        )
+        return {
+            "success": True,
+            "latency_ms": (time.perf_counter() - start_time) * 1000,
+            "bytes": file_size_bytes,
+            "attempts": attempts,
+            "error": "",
+        }
+    except OperationFailed as error:
+        attempts = error.attempts
+        message = str(error)
+    except Exception as error:
+        message = f"Unexpected worker error: {error}"
 
-    latency_ms = (time.perf_counter() - start_time) * 1000
+    logger.error("Object %d failed: %s", object_index, message)
     return {
-        "success": success,
-        "latency_ms": latency_ms,
-        "bytes": file_size_bytes if success else 0,
-        "attempts": attempts
+        "success": False,
+        "latency_ms": (time.perf_counter() - start_time) * 1000,
+        "bytes": 0,
+        "attempts": attempts,
+        "error": message,
     }
 
-def run_load_generator(num_files: int, threads: int, file_size_str: str, bucket_name: str):
-    file_size_bytes = parse_size(file_size_str)
-    
-    print("\n" + "="*50)
-    print(" BẮT ĐẦU CHẠY TẢI (LOAD GENERATOR)")
-    print("="*50)
-    print(f" Target Bucket : {bucket_name}")
-    print(f" Tổng file     : {num_files}")
-    print(f" Số luồng      : {threads}")
-    print(f" Dung lượng    : {file_size_str} ({file_size_bytes} Bytes)")
-    print(f" Endpoint      : {MINIO_ENDPOINT}")
-    print("="*50 + "\n")
 
-    results = []
-    wall_start = time.perf_counter()
+def percentile(values: list[float], percent: float) -> float:
+    """Calculate a linearly interpolated percentile without numpy."""
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    if len(ordered) == 1:
+        return ordered[0]
 
-    with ThreadPoolExecutor(max_workers=threads) as executor:
-        futures = [
-            executor.submit(upload_worker, bucket_name, file_size_bytes)
-            for _ in range(num_files)
-        ]
-        
-        for idx, future in enumerate(as_completed(futures), 1):
-            results.append(future.result())
-            if idx % max(1, num_files // 10) == 0 or idx == num_files:
-                progress = (idx / num_files) * 100
-                print(f"[*] Tiến độ: {idx}/{num_files} ({progress:.1f}%)")
+    rank = (len(ordered) - 1) * percent / 100
+    lower_index = math.floor(rank)
+    upper_index = math.ceil(rank)
+    if lower_index == upper_index:
+        return ordered[lower_index]
 
-    total_duration = time.perf_counter() - wall_start
-    generate_benchmark_report(results, total_duration, num_files, threads, file_size_str)
+    weight = rank - lower_index
+    return (
+        ordered[lower_index] * (1 - weight)
+        + ordered[upper_index] * weight
+    )
 
-def generate_benchmark_report(results: list, total_duration: float, num_files: int, threads: int, file_size_str: str):
-    """Tính toán latency, throughput, percentile và lưu kết quả JSON."""
-    success_requests = [r for r in results if r["success"]]
-    failed_requests = [r for r in results if not r["success"]]
-    
-    latencies = [r["latency_ms"] for r in success_requests]
-    total_bytes_sent = sum(r["bytes"] for r in success_requests)
-    
-    total_data_mb = total_bytes_sent / (1024 * 1024)
-    throughput_mb_s = total_data_mb / total_duration if total_duration > 0 else 0
-    
-    avg_latency = float(np.mean(latencies)) if latencies else 0.0
-    p95_latency = float(np.percentile(latencies, 95)) if latencies else 0.0
-    p99_latency = float(np.percentile(latencies, 99)) if latencies else 0.0
-    success_rate = (len(success_requests) / num_files) * 100 if num_files > 0 else 0.0
 
-    report = {
-        "metadata": {
+def git_output(*arguments: str) -> str:
+    """Read concise Git metadata without failing outside a Git checkout."""
+    try:
+        result = subprocess.run(
+            ["git", *arguments],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+    return result.stdout.strip()
+
+
+def working_tree_is_dirty() -> bool | str:
+    """Report whether runtime code differs from its recorded commit."""
+    status = git_output("status", "--porcelain")
+    if status == "unknown":
+        return "unknown"
+    return bool(status)
+
+
+def build_report(
+    *,
+    settings: S3Settings,
+    bucket_name: str,
+    topology: str,
+    object_prefix: str,
+    num_files: int,
+    threads: int,
+    file_size_bytes: int,
+    results: list[dict[str, Any]],
+    total_duration: float,
+) -> dict[str, Any]:
+    """Build a report containing workload, context, performance, and failures."""
+    successful = [result for result in results if result["success"]]
+    failed = [result for result in results if not result["success"]]
+    latencies = [result["latency_ms"] for result in successful]
+    total_bytes = sum(result["bytes"] for result in successful)
+    total_mib = total_bytes / (1024**2)
+    success_rate = len(successful) / num_files * 100
+    failure_rate = len(failed) / num_files * 100
+    error_counts = Counter(result["error"] for result in failed)
+
+    return {
+        "schema_version": 1,
+        "context": {
+            "timestamp_utc": datetime.now(timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z"),
+            "branch": git_output("branch", "--show-current"),
+            "commit": git_output("rev-parse", "HEAD"),
+            "working_tree_dirty": working_tree_is_dirty(),
+            "endpoint": settings.endpoint_url,
+            "bucket": bucket_name,
+            "topology": topology,
+            "credential_source": settings.credential_source,
+            "object_prefix": object_prefix,
+            "host": {
+                "platform": platform.system(),
+                "release": platform.release(),
+                "machine": platform.machine(),
+                "cpu_count": os.cpu_count(),
+            },
+        },
+        "workload": {
             "num_files": num_files,
             "threads": threads,
-            "file_size": file_size_str,
-            "timestamp": int(time.time())
+            "file_size_bytes": file_size_bytes,
+            "planned_total_bytes": num_files * file_size_bytes,
         },
         "performance": {
-            "total_duration_sec": round(total_duration, 2),
-            "total_data_uploaded_mb": round(total_data_mb, 2),
-            "average_throughput_mb_s": round(throughput_mb_s, 2),
-            "success_rate_percent": round(success_rate, 2),
-            "total_success": len(success_requests),
-            "total_failed": len(failed_requests)
+            "total_duration_sec": round(total_duration, 4),
+            "total_uploaded_mib": round(total_mib, 4),
+            "average_throughput_mib_s": round(
+                total_mib / total_duration if total_duration > 0 else 0,
+                4,
+            ),
+            "success_rate_percent": round(success_rate, 4),
+            "failure_rate_percent": round(failure_rate, 4),
+            "total_success": len(successful),
+            "total_failed": len(failed),
         },
         "latency_ms": {
-            "average": round(avg_latency, 2),
-            "p95": round(p95_latency, 2),
-            "p99": round(p99_latency, 2)
-        }
+            "average": round(fmean(latencies), 4) if latencies else 0.0,
+            "p95": round(percentile(latencies, 95), 4),
+            "p99": round(percentile(latencies, 99), 4),
+        },
+        "retry": {
+            "max_attempts": MAX_ATTEMPTS,
+            "requests_retried": sum(
+                1 for result in results if result["attempts"] > 1
+            ),
+        },
+        "failures": {
+            "by_error": dict(error_counts.most_common(10)),
+        },
     }
 
-    print("\n" + "="*50)
-    print(" KẾT QUẢ TỔNG KẾT (BENCHMARK REPORT)")
-    print("="*50)
-    print(f"Tổng thời gian chạy (Total Duration) : {report['performance']['total_duration_sec']} s")
-    print(f"Tổng dung lượng nạp                   : {report['performance']['total_data_uploaded_mb']} MB")
-    print(f"Tốc độ trung bình (Throughput)       : {report['performance']['average_throughput_mb_s']} MB/s")
-    print(f"Tỷ lệ thành công (Success Rate)      : {report['performance']['success_rate_percent']}% ({len(success_requests)} OK, {len(failed_requests)} Fail)")
-    print(f"Độ trễ trung bình (Avg Latency)      : {report['latency_ms']['average']} ms")
-    print(f"Độ trễ Percentile 95 (P95)           : {report['latency_ms']['p95']} ms")
-    print(f"Độ trễ Percentile 99 (P99)           : {report['latency_ms']['p99']} ms")
-    print("="*50)
 
-    output_filename = "benchmark_results.json"
-    with open(output_filename, "w", encoding="utf-8") as f:
-        json.dump(report, f, indent=4)
-    print(f"[>] Đã lưu file kết quả: {output_filename}\n")
+def write_report(report: dict[str, Any], output_path: Path) -> None:
+    """Write JSON output to an explicit path."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(
+        json.dumps(report, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+
+def print_report(report: dict[str, Any], output_path: Path) -> None:
+    """Print the required benchmark summary without exposing credentials."""
+    performance = report["performance"]
+    latency = report["latency_ms"]
+    print("\n" + "=" * 60)
+    print("LOAD GENERATOR RESULT")
+    print("=" * 60)
+    print(
+        f"Duration      : {performance['total_duration_sec']:.4f} seconds"
+    )
+    print(
+        "Throughput    : "
+        f"{performance['average_throughput_mib_s']:.4f} MiB/s"
+    )
+    print(
+        "Success       : "
+        f"{performance['total_success']} "
+        f"({performance['success_rate_percent']:.2f}%)"
+    )
+    print(
+        "Failure       : "
+        f"{performance['total_failed']} "
+        f"({performance['failure_rate_percent']:.2f}%)"
+    )
+    print(f"Average       : {latency['average']:.4f} ms")
+    print(f"P95 / P99     : {latency['p95']:.4f} / {latency['p99']:.4f} ms")
+    print(f"Result file   : {output_path}")
+    print("=" * 60)
+
+
+def run_load_generator(
+    *,
+    settings: S3Settings,
+    bucket_name: str,
+    topology: str,
+    num_files: int,
+    threads: int,
+    file_size_bytes: int,
+    output_path: Path,
+) -> int:
+    """Run preflight, concurrent uploads, and report generation."""
+    logger.info(
+        "Preflight endpoint=%s bucket=%s credential_source=%s",
+        settings.endpoint_url,
+        bucket_name,
+        settings.credential_source,
+    )
+    try:
+        preflight(settings, bucket_name)
+    except OperationFailed as error:
+        logger.error("Ingestion preflight failed: %s", error)
+        return 1
+    except Exception as error:
+        logger.error("Preflight setup failed: %s", error)
+        return 1
+
+    run_id = (
+        datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        + "-"
+        + uuid.uuid4().hex[:8]
+    )
+    object_prefix = f"load-test/run_id={run_id}"
+    logger.info(
+        "Starting load: files=%d threads=%d size=%d prefix=%s",
+        num_files,
+        threads,
+        file_size_bytes,
+        object_prefix,
+    )
+
+    results: list[dict[str, Any]] = []
+    wall_start = time.perf_counter()
+    with ThreadPoolExecutor(
+        max_workers=threads,
+        thread_name_prefix="minio-load",
+    ) as executor:
+        futures = [
+            executor.submit(
+                upload_worker,
+                settings,
+                bucket_name,
+                object_prefix,
+                object_index,
+                file_size_bytes,
+            )
+            for object_index in range(1, num_files + 1)
+        ]
+        progress_interval = max(1, num_files // 10)
+        for completed, future in enumerate(as_completed(futures), 1):
+            try:
+                results.append(future.result())
+            except Exception as error:
+                logger.error("Unexpected future error: %s", error)
+                results.append(
+                    {
+                        "success": False,
+                        "latency_ms": 0.0,
+                        "bytes": 0,
+                        "attempts": 0,
+                        "error": f"Unexpected future error: {error}",
+                    }
+                )
+            if completed % progress_interval == 0 or completed == num_files:
+                logger.info(
+                    "Progress %d/%d (%.1f%%)",
+                    completed,
+                    num_files,
+                    completed / num_files * 100,
+                )
+
+    total_duration = time.perf_counter() - wall_start
+    report = build_report(
+        settings=settings,
+        bucket_name=bucket_name,
+        topology=topology,
+        object_prefix=object_prefix,
+        num_files=num_files,
+        threads=threads,
+        file_size_bytes=file_size_bytes,
+        results=results,
+        total_duration=total_duration,
+    )
+    write_report(report, output_path)
+    print_report(report, output_path)
+    return 0 if report["performance"]["total_failed"] == 0 else 1
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Build the command-line interface."""
+    parser = argparse.ArgumentParser(
+        description="Generate concurrent upload load against MinIO through Nginx."
+    )
+    parser.add_argument(
+        "--num-files",
+        type=bounded_positive_int(MAX_FILES),
+        required=True,
+        help=f"Number of objects to upload (maximum {MAX_FILES:,}).",
+    )
+    parser.add_argument(
+        "--threads",
+        type=bounded_positive_int(MAX_THREADS),
+        required=True,
+        help=f"Concurrent worker threads (maximum {MAX_THREADS}).",
+    )
+    parser.add_argument(
+        "--file-size",
+        type=size_argument,
+        required=True,
+        metavar="SIZE",
+        help="Object size such as 100KB or 1MB (maximum 1GB).",
+    )
+    parser.add_argument(
+        "--bucket",
+        type=bucket_argument,
+        default="raw-data",
+        help="Existing destination bucket (default: raw-data).",
+    )
+    parser.add_argument(
+        "--topology",
+        default="distributed-4-node",
+        help="Topology label stored in the JSON report.",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path("benchmark_results.json"),
+        help="JSON result path (default: benchmark_results.json).",
+    )
+    return parser
+
+
+def main() -> int:
+    """CLI entrypoint."""
+    load_dotenv()
+    parser = build_parser()
+    args = parser.parse_args()
+    planned_total_bytes = args.num_files * args.file_size
+    if planned_total_bytes > MAX_TOTAL_BYTES:
+        parser.error(
+            "Planned workload exceeds 10GiB. Reduce --num-files or --file-size."
+        )
+
+    try:
+        settings = load_settings()
+    except ConfigurationError as error:
+        parser.error(str(error))
+
+    return run_load_generator(
+        settings=settings,
+        bucket_name=args.bucket,
+        topology=args.topology,
+        num_files=args.num_files,
+        threads=args.threads,
+        file_size_bytes=args.file_size,
+        output_path=args.output,
+    )
+
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="MinIO Distributed Load Testing Tool")
-    parser.add_argument("--num-files", type=int, required=True, help="Số lượng file cần upload (vd: 5000)")
-    parser.add_argument("--threads", type=int, required=True, help="Số luồng chạy song song (vd: 8)")
-    parser.add_argument("--file-size", type=str, required=True, help="Kích thước mỗi file (vd: 1MB, 512KB)")
-    parser.add_argument("--bucket", type=str, default="raw-data", help="Tên bucket đích (mặc định: raw-data)")
-
-    args = parser.parse_args()
-    run_load_generator(args.num_files, args.threads, args.file_size, args.bucket)
+    raise SystemExit(main())

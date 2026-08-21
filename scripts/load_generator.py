@@ -9,6 +9,7 @@ import math
 import os
 import platform
 import re
+import shutil
 import subprocess
 import threading
 import time
@@ -37,6 +38,7 @@ MAX_FILES = 20_000
 MAX_THREADS = 128
 MAX_FILE_SIZE_BYTES = 1024**3
 MAX_TOTAL_BYTES = 10 * 1024**3
+MAX_INFLIGHT_BYTES = 512 * 1024**2
 TRANSIENT_S3_CODES = {
     "InternalError",
     "RequestTimeout",
@@ -143,6 +145,28 @@ def bucket_argument(value: str) -> str:
             "Bucket name must not contain consecutive dots."
         )
     return bucket
+
+
+def validate_workload(
+    num_files: int,
+    threads: int,
+    file_size_bytes: int,
+) -> tuple[int, int]:
+    """Validate total and concurrently allocated payload sizes."""
+    planned_total_bytes = num_files * file_size_bytes
+    if planned_total_bytes > MAX_TOTAL_BYTES:
+        raise ValueError(
+            "Planned workload exceeds 10GiB. "
+            "Reduce --num-files or --file-size."
+        )
+
+    inflight_bytes = min(threads, num_files) * file_size_bytes
+    if inflight_bytes > MAX_INFLIGHT_BYTES:
+        raise ValueError(
+            "Concurrent in-memory payload exceeds 512MiB. "
+            "Reduce --threads or --file-size."
+        )
+    return planned_total_bytes, inflight_bytes
 
 
 def load_settings() -> S3Settings:
@@ -284,12 +308,14 @@ def upload_worker(
     object_key = (
         f"{object_prefix}/object-{object_index:06d}-{uuid.uuid4().hex}.bin"
     )
-    start_time = time.perf_counter()
+    start_time: float | None = None
     attempts = 0
 
     try:
         payload = os.urandom(file_size_bytes)
         client = get_thread_client(settings)
+        # Measure the S3 operation, not local random-payload generation.
+        start_time = time.perf_counter()
         _, attempts = run_with_retry(
             lambda: client.put_object(
                 Bucket=bucket_name,
@@ -318,7 +344,11 @@ def upload_worker(
     logger.error("Object %d failed: %s", object_index, message)
     return {
         "success": False,
-        "latency_ms": (time.perf_counter() - start_time) * 1000,
+        "latency_ms": (
+            (time.perf_counter() - start_time) * 1000
+            if start_time is not None
+            else 0.0
+        ),
         "bytes": 0,
         "attempts": attempts,
         "error": message,
@@ -369,6 +399,67 @@ def working_tree_is_dirty() -> bool | str:
     return bool(status)
 
 
+def total_memory_bytes() -> int | None:
+    """Return physical host memory using only the Python standard library."""
+    try:
+        if os.name == "nt":
+            import ctypes
+
+            class MemoryStatus(ctypes.Structure):
+                _fields_ = [
+                    ("length", ctypes.c_ulong),
+                    ("memory_load", ctypes.c_ulong),
+                    ("total_physical", ctypes.c_ulonglong),
+                    ("available_physical", ctypes.c_ulonglong),
+                    ("total_page_file", ctypes.c_ulonglong),
+                    ("available_page_file", ctypes.c_ulonglong),
+                    ("total_virtual", ctypes.c_ulonglong),
+                    ("available_virtual", ctypes.c_ulonglong),
+                    ("available_extended_virtual", ctypes.c_ulonglong),
+                ]
+
+            status = MemoryStatus()
+            status.length = ctypes.sizeof(MemoryStatus)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(
+                ctypes.byref(status)
+            ):
+                return int(status.total_physical)
+            return None
+
+        page_size = os.sysconf("SC_PAGE_SIZE")
+        page_count = os.sysconf("SC_PHYS_PAGES")
+        return int(page_size * page_count)
+    except (AttributeError, OSError, ValueError):
+        return None
+
+
+def host_context() -> dict[str, Any]:
+    """Capture host context needed to interpret benchmark results."""
+    memory_bytes = total_memory_bytes()
+    try:
+        disk = shutil.disk_usage(Path.cwd())
+    except OSError:
+        disk = None
+
+    return {
+        "platform": platform.system(),
+        "release": platform.release(),
+        "machine": platform.machine(),
+        "cpu_count": os.cpu_count(),
+        "memory_gib": (
+            round(memory_bytes / (1024**3), 2)
+            if memory_bytes is not None
+            else "unknown"
+        ),
+        "disk_total_gib": (
+            round(disk.total / (1024**3), 2) if disk is not None else "unknown"
+        ),
+        "disk_free_gib": (
+            round(disk.free / (1024**3), 2) if disk is not None else "unknown"
+        ),
+    }
+
+
 def build_report(
     *,
     settings: S3Settings,
@@ -405,18 +496,15 @@ def build_report(
             "topology": topology,
             "credential_source": settings.credential_source,
             "object_prefix": object_prefix,
-            "host": {
-                "platform": platform.system(),
-                "release": platform.release(),
-                "machine": platform.machine(),
-                "cpu_count": os.cpu_count(),
-            },
+            "host": host_context(),
         },
         "workload": {
             "num_files": num_files,
             "threads": threads,
             "file_size_bytes": file_size_bytes,
             "planned_total_bytes": num_files * file_size_bytes,
+            "planned_inflight_bytes": min(threads, num_files)
+            * file_size_bytes,
         },
         "performance": {
             "total_duration_sec": round(total_duration, 4),
@@ -632,11 +720,10 @@ def main() -> int:
     load_dotenv()
     parser = build_parser()
     args = parser.parse_args()
-    planned_total_bytes = args.num_files * args.file_size
-    if planned_total_bytes > MAX_TOTAL_BYTES:
-        parser.error(
-            "Planned workload exceeds 10GiB. Reduce --num-files or --file-size."
-        )
+    try:
+        validate_workload(args.num_files, args.threads, args.file_size)
+    except ValueError as error:
+        parser.error(str(error))
 
     try:
         settings = load_settings()

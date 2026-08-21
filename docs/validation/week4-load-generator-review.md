@@ -10,6 +10,10 @@
 > lý và runtime-verify trên `fix/member2-week4-load-generator`. Xem
 > `docs/validation/week4-member2-load-test.md`.
 
+> Cập nhật cuối 22/08/2026: source final được commit tại `490cbe1`, có guard
+> payload đồng thời `512 MiB`, unit test và CI Python. Benchmark chính thức đã
+> được chạy lại từ working tree sạch.
+
 ## Kết luận
 
 Branch đã có multi-threading, CLI arguments, dữ liệu sinh trong RAM, latency
@@ -72,4 +76,6 @@ endpoint/topology, host CPU/RAM/storage và thời gian dạng ISO 8601. Vì v�
 - Smoke test 100 object: `100/100` thành công.
 - Full load 5.000 object: `5.000/5.000` thành công.
 - Grafana/Prometheus metrics và resource usage đã được runtime-verify.
-- Chưa commit, push hoặc merge.
+- Report cuối ghi đúng commit `490cbe1` và `working_tree_dirty: false`.
+- Host context đã có CPU, RAM và dung lượng đĩa.
+- Branch fix đã tồn tại trên remote và chưa merge vào `develop`.

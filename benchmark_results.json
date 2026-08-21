@@ -1,41 +1,45 @@
 {
   "schema_version": 1,
   "context": {
-    "timestamp_utc": "2026-08-21T15:57:44.437139Z",
+    "timestamp_utc": "2026-08-21T17:36:53.381693Z",
     "branch": "fix/member2-week4-load-generator",
-    "commit": "a45938d1cd4449fd06f6f7a304e4e68a8e6ca37d",
-    "working_tree_dirty": true,
+    "commit": "490cbe1805dc8017210d7547900d575a34cc9e91",
+    "working_tree_dirty": false,
     "endpoint": "http://localhost:9000",
     "bucket": "raw-data",
     "topology": "distributed-4-node",
     "credential_source": "root-lab-fallback",
-    "object_prefix": "load-test/run_id=20260821T155718Z-913baa85",
+    "object_prefix": "load-test/run_id=20260821T173627Z-02d5a103",
     "host": {
       "platform": "Windows",
       "release": "11",
       "machine": "AMD64",
-      "cpu_count": 20
+      "cpu_count": 20,
+      "memory_gib": 15.64,
+      "disk_total_gib": 250.0,
+      "disk_free_gib": 23.91
     }
   },
   "workload": {
     "num_files": 5000,
     "threads": 8,
     "file_size_bytes": 102400,
-    "planned_total_bytes": 512000000
+    "planned_total_bytes": 512000000,
+    "planned_inflight_bytes": 819200
   },
   "performance": {
-    "total_duration_sec": 25.7703,
+    "total_duration_sec": 25.6774,
     "total_uploaded_mib": 488.2812,
-    "average_throughput_mib_s": 18.9475,
+    "average_throughput_mib_s": 19.016,
     "success_rate_percent": 100.0,
     "failure_rate_percent": 0.0,
     "total_success": 5000,
     "total_failed": 0
   },
   "latency_ms": {
-    "average": 41.1419,
-    "p95": 84.5289,
-    "p99": 110.9209
+    "average": 40.8964,
+    "p95": 75.5691,
+    "p99": 102.8179
   },
   "retry": {
     "max_attempts": 3,

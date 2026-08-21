@@ -5,7 +5,8 @@
 - Branch sửa: `fix/member2-week4-load-generator`.
 - Baseline Member 2: `7d0dca9`.
 - Baseline `develop` đã merge vào branch fix: `ae47ee6`.
-- Ngày chạy runtime: 21/08/2026.
+- Source commit được kiểm thử: `490cbe1805dc8017210d7547900d575a34cc9e91`.
+- Ngày chạy runtime cuối: 22/08/2026 theo giờ Việt Nam.
 - Evidence phân biệt rõ `Source inspected`, `Runtime verified` và
   `Not executed`.
 
@@ -26,8 +27,14 @@
 - Mỗi worker thread tái sử dụng một boto3 client.
 - CLI giới hạn tối đa 20.000 object, 128 thread, 1 GiB/object và 10 GiB tổng
   workload cho laptop lab.
+- CLI chặn workload có payload đồng thời vượt `512 MiB`, được tính bằng
+  `min(threads, num_files) * file_size`. Guard này ngăn trường hợp hợp lệ theo
+  tổng dung lượng nhưng có nguy cơ làm laptop hết RAM.
+- `latency_ms` chỉ đo S3 upload, bao gồm retry/backoff nếu có nhưng không bao
+  gồm thời gian tạo payload bằng `os.urandom()`.
 - JSON report có timestamp ISO 8601 UTC, branch, commit, dirty state, endpoint,
-  bucket, topology, workload, latency, throughput và success/failure rate.
+  bucket, topology, workload, latency, throughput, success/failure rate, tổng
+  RAM và dung lượng đĩa của host.
 
 ## Static verified
 
@@ -40,6 +47,11 @@ python scripts/load_generator.py `
   --num-files 0 `
   --threads 4 `
   --file-size 1KB
+python -m unittest discover -s tests -p "test_*.py" -v
+python scripts/load_generator.py `
+  --num-files 10 `
+  --threads 10 `
+  --file-size 1GB
 ~~~
 
 Kết quả:
@@ -47,9 +59,13 @@ Kết quả:
 - `py_compile`: pass.
 - `--help`: pass và hiển thị đầy đủ CLI.
 - `--num-files 0`: bị argparse từ chối.
+- Workload `10 x 1 GiB` với 10 thread bị từ chối vì payload đồng thời vượt
+  `512 MiB`; script chưa cấp phát payload.
 - `git diff --check`: pass sau khi sửa trailing whitespace.
-- Unit check xác nhận HTTP 500/429 được retry, HTTP 403/404 không retry.
-- Unit check percentile P95: pass.
+- `12/12` unit test pass.
+- Unit test xác nhận HTTP 500/429 là transient, HTTP 403/404 không retry,
+  HTTP 500 exhaust đúng ba attempt và HTTP 403 dừng sau attempt đầu.
+- CI đã được bổ sung `py_compile` và `unittest` bên cạnh Compose validation.
 
 ## Runtime verified: failure handling
 
@@ -89,21 +105,20 @@ python scripts/load_generator.py `
   --file-size 1MB `
   --bucket raw-data `
   --topology distributed-4-node `
-  --output benchmark_results.json
+  --output "$env:TEMP\week4-smoke-results.json"
 ~~~
 
 Kết quả:
 
-- Tổng thời gian: `1,0899 giây`.
-- Throughput ứng dụng: `91,7519 MiB/s`.
+- Tổng thời gian: `1,2548 giây`.
+- Throughput ứng dụng: `79,6930 MiB/s`.
 - Thành công: `100/100`.
 - Thất bại: `0`.
-- Average latency: `84,8074 ms`.
-- P95: `126,7907 ms`.
-- P99: `135,4518 ms`.
-- Prometheus ghi nhận `PutObject` rate khác 0 và bốn node `UP`.
-- RAM cao nhất trong snapshot khoảng 17,2% limit của một MinIO node.
-- Prefix 100 object đã được xóa sau kiểm thử.
+- Average S3 upload latency: `97,3589 ms`.
+- P95: `173,6487 ms`.
+- P99: `199,3936 ms`.
+- Report ghi commit `490cbe1` và `working_tree_dirty: false`.
+- Prefix 100 object đã được xóa; kiểm tra lại không còn object trong prefix.
 
 ## Runtime verified: full load
 
@@ -122,45 +137,49 @@ python scripts/load_generator.py `
 Kết quả:
 
 - Tổng logical payload: khoảng `488,28 MiB`.
-- Tổng thời gian: `25,7703 giây`.
-- Throughput ứng dụng: `18,9475 MiB/s`.
+- Tổng thời gian: `25,6774 giây`.
+- Throughput ứng dụng: `19,0160 MiB/s`.
 - Thành công: `5.000/5.000`.
 - Thất bại: `0`.
 - Success rate: `100%`.
-- Average latency: `41,1419 ms`.
-- P95: `84,5289 ms`.
-- P99: `110,9209 ms`.
+- Average S3 upload latency: `40,8964 ms`.
+- P95: `75,5691 ms`.
+- P99: `102,8179 ms`.
 - Không request nào phải retry.
+- Payload đồng thời theo cấu hình chỉ là `819.200 byte`, dưới guard `512 MiB`.
 
 Resource snapshot trong lúc tải:
 
-- MinIO CPU cao nhất khoảng `102%`, phù hợp limit 1 CPU/node.
-- MinIO RAM cao nhất khoảng `450,9 MiB/1 GiB`, tương đương `44,03%`.
-- Nginx cao nhất khoảng `12,16% CPU`, `4,14 MiB/256 MiB`.
-- Prometheus khoảng `49,5 MiB/512 MiB`.
-- Grafana khoảng `48,4 MiB/512 MiB`.
+- MinIO CPU cao nhất khoảng `101,18%`, phù hợp limit 1 CPU/node.
+- MinIO RAM cao nhất khoảng `484,6 MiB/1 GiB`, tương đương `47,33%`.
+- Nginx cao nhất khoảng `10,00% CPU`, `4,332 MiB/256 MiB`.
+- Prometheus cao nhất trong các snapshot khoảng `53,07 MiB/512 MiB`.
+- Grafana cao nhất trong các snapshot khoảng `49,14 MiB/512 MiB`.
 
 Observability:
 
-- Prometheus inbound traffic query: khoảng `10.873.984 byte/second` tại thời
-  điểm lấy mẫu.
-- `PutObject` request rate: khoảng `100,31 request/second`.
+- Query range đúng khoảng chạy ghi nhận inbound traffic cao nhất khoảng
+  `6.811.067 byte/second`.
+- `PutObject` request rate cao nhất trong cùng query range khoảng
+  `68,65 request/second`.
 - Bốn series `up{job="minio-node"}` đều bằng `1`.
 - Nginx, Prometheus và Grafana đều trả HTTP `200` sau full load.
-- Prefix 5.000 object đã được xóa sau kiểm thử.
+- Prefix được đếm đủ `5.000` object trước cleanup và `0` object sau cleanup.
 
 ## JSON evidence
 
 `benchmark_results.json` chứa kết quả full load. Report ghi:
 
 - branch `fix/member2-week4-load-generator`;
-- commit baseline `a45938d1cd4449fd06f6f7a304e4e68a8e6ca37d`;
-- `working_tree_dirty: true`;
-- endpoint, bucket, topology, workload và host context.
+- commit source `490cbe1805dc8017210d7547900d575a34cc9e91`;
+- `working_tree_dirty: false` tại thời điểm đo;
+- endpoint, bucket, topology, workload và payload đồng thời;
+- host Windows 11, 20 logical CPU, `15,64 GiB` RAM, đĩa `250 GiB` và
+  `23,91 GiB` trống tại thời điểm chạy.
 
-`working_tree_dirty: true` là chính xác vì người dùng yêu cầu chưa commit. Sau
-khi commit code fix, cần chạy lại workload cuối nếu muốn report gắn với commit
-sạch dùng cho benchmark chính thức.
+Dirty state được lấy trước khi ghi đè file report. Vì vậy giá trị `false` chứng
+minh source được benchmark khớp commit trên, còn file JSON trở thành thay đổi
+working tree sau khi phép đo hoàn tất là hành vi dự kiến.
 
 ## Not executed
 
@@ -174,5 +193,6 @@ sạch dùng cho benchmark chính thức.
 ## Kết luận
 
 Load generator đã đạt yêu cầu source và runtime Tuần 4 trên branch fix. Không còn
-blocker hardcode credential, dependency hoặc retry quá rộng. Branch chưa được
-commit, push hoặc merge trong phiên validation này.
+blocker hardcode credential, dependency, retry quá rộng, memory guard hoặc
+evidence từ source dirty. Branch fix đã tồn tại trên remote; source final đã
+được commit, nhưng chưa merge vào `develop` tại thời điểm cập nhật tài liệu.

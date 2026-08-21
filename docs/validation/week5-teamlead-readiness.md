@@ -7,6 +7,7 @@
 - Ngày kiểm tra: 22/08/2026.
 - Agent: `architect`, `sre`, `reviewer`, `reporter`.
 - Skill: `benchmark`, `observability`, `project-validation`.
+- Freeze state: `INFRASTRUCTURE_FREEZE`; Final Code Freeze chưa kích hoạt.
 
 Không chạy `docker compose down -v` trên stack chính. Fresh bootstrap dùng project
 cô lập `week5fresh`; chỉ volume có label/prefix của project này được xóa.
@@ -47,7 +48,8 @@ Runtime verified:
 - Nginx live/ready, Prometheus và Grafana trả HTTP `200`;
 - `mc admin info`: `Network 4/4 OK`, mỗi node `Drives 2/2 OK`;
 - 8 drive online, 0 offline, một pool, `EC:4`;
-- bucket list rỗng, chứng minh dùng volume mới;
+- bucket list rỗng, chứng minh dùng volume mới nhưng đồng thời xác nhận logical
+  state chưa được tự provision;
 - Grafana tạo database mới và provision datasource/dashboard.
 
 Sau validation, đúng 10 volume `week5fresh_*` được xóa; kiểm tra còn `0` volume
@@ -71,8 +73,23 @@ Kết quả:
 - marker vẫn đọc đúng `week5-persistence-marker` sau restart;
 - object và bucket marker đã được xóa sau kiểm tra.
 
-Kết luận: `validated for fresh bootstrap and persistent restart on one-host lab`.
-Đây không phải chứng nhận production readiness hoặc multi-host HA.
+Kết luận: `one-command infrastructure bootstrap verified on one-host lab`.
+Kết quả này chỉ bao gồm container, network, volume, distributed MinIO và monitoring.
+Nó không chứng minh one-command complete-system bootstrap, production readiness
+hoặc multi-host HA.
+
+## Logical provisioning chưa được xác minh
+
+Fresh bootstrap chưa tự tạo hoặc chứng minh các thành phần sau:
+
+- bucket `raw-data`, `processed-data`, `system-logs`;
+- application user, IAM policy và policy attachment;
+- versioning hoặc lifecycle rule;
+- checksum workflow trên object đã upload rồi download.
+
+Vì vậy tài liệu và slide chỉ được dùng cụm từ `one-command infrastructure
+bootstrap`. Chỉ đổi thành `complete-system bootstrap` sau khi các thành phần trên
+được provision tự động bằng cùng flow và có runtime evidence.
 
 ## Điểm cần theo dõi
 
@@ -81,5 +98,9 @@ Kết luận: `validated for fresh bootstrap and persistent restart on one-host 
 - Screenshot Grafana và video startup chưa được coordinator thu vì không có
   browser/video recorder; phải quay/chụp thủ công và không được ghi là đã có.
 - Benchmark Standalone-vs-Distributed thuộc Member 2 và chưa được coi là hoàn
-  thành chỉ từ baseline 4 node Tuần 4.
+  thành chỉ từ baseline 4 node Tuần 4. Source chưa có `--mode`; `--topology` chỉ
+  ghi nhãn report và chưa tạo standalone topology thật.
+- `mc_setup.sh` còn credential fallback hardcode và mới tạo một bucket; đây là
+  security/functional blocker trước Final Code Freeze.
+- Checksum của Member 3 hiện mới hash local file, chưa kiểm tra upload-download.
 - IAM/Lifecycle/Chaos của Member 3 cần review độc lập trước khi đưa vào báo cáo.

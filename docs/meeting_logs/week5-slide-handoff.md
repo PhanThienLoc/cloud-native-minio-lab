@@ -3,7 +3,9 @@
 ## Baseline
 
 - `develop`: `2245087` sau PR #13.
-- Trạng thái: Code Freeze, chỉ nhận `fix:` và `docs:`.
+- Trạng thái: Infrastructure Freeze; Final Code Freeze chưa kích hoạt.
+- `feat:` chỉ được phép cho deliverable tồn đọng đã phê duyệt trong roadmap; sau
+  Final Code Freeze mới chỉ nhận `fix:` và `docs:`.
 - Kiến trúc: 4 MinIO node x 2 volume, Nginx, Prometheus, Grafana trên
   `minio-net`.
 
@@ -68,6 +70,10 @@ Checklist chụp Grafana:
 - Không gọi lab một host là production hoặc multi-host HA.
 - Không tuyên bố benchmark 1 node vs 4 node trước khi Member 2 chạy cùng workload
   tối thiểu ba lần cho mỗi topology.
+- Không dùng `--topology` như bằng chứng đã chuyển topology; standalone phải là
+  deployment/endpoint thật và cô lập với distributed baseline.
 - IAM, Lifecycle và Chaos chỉ đưa vào phần “đã hoàn thành” khi branch tương ứng
   đã merge và có runtime evidence.
+- Chỉ gọi kết quả hiện tại là `one-command infrastructure bootstrap`; bucket,
+  IAM, versioning và lifecycle chưa được tự provision trên volume mới.
 - Dùng “4 node x 2 volume = 8 drive endpoint”, không nói Nginx tạo Erasure Coding.

@@ -271,11 +271,13 @@ Giới hạn tối đa của lab là `512 MiB RAM` và `0.50 CPU` cho mỗi serv
 và Grafana. Trước load test 5.000 object, chạy thử 100 object và theo dõi Docker
 Desktop; giảm threads nếu host dùng trên 80% RAM.
 
-## 8. Tuần 5: Code Freeze, readiness và benchmark
+## 8. Tuần 5: Freeze gates, readiness và benchmark
 
-Code Freeze áp dụng từ baseline `develop` tại commit `2245087`. Chỉ nhận PR `fix:`
-hoặc `docs:` qua `develop`; không nhận `feat:` và không push trực tiếp vào nhánh tích
-hợp. Quy định đầy đủ nằm tại
+Infrastructure Freeze áp dụng từ baseline `develop` tại commit `2245087`; Final
+Code Freeze chưa kích hoạt. Distributed baseline, endpoint, resource limits và
+monitoring config không được đổi trong khi benchmark. `feat:` chỉ được phép cho
+deliverable tồn đọng đã có trong roadmap như benchmark mode/harness, checksum và
+IAM; không dùng `fix:` để che một tính năng mới. Quy định đầy đủ nằm tại
 [`governance/week5-code-freeze.md`](governance/week5-code-freeze.md).
 
 Kiểm tra file môi trường và cấu hình trước khi khởi động:
@@ -293,12 +295,16 @@ khởi động lại bằng lệnh `up -d`. Không chạy `down -v` trên projec
 Fresh bootstrap đã được xác minh bằng một Compose project cô lập với volume riêng,
 không xóa dữ liệu của stack chính. Kết quả chi tiết nằm tại
 [`validation/week5-teamlead-readiness.md`](validation/week5-teamlead-readiness.md).
+Đây là `one-command infrastructure bootstrap`: bucket, IAM, versioning và lifecycle
+chưa được chứng minh tự provision trên volume mới.
 
 Mỗi benchmark cần ghi topology 1 node hoặc 4 node, workload, object size,
 concurrency, latency, throughput, success/error rate, tài nguyên host và commit cấu
 hình. Không so sánh hai kết quả nếu workload, resource limit hoặc host khác nhau.
 Benchmark Standalone-vs-Distributed là deliverable của Member 2; baseline 4 node
-Tuần 4 không tự tạo thành phép so sánh hai topology.
+Tuần 4 không tự tạo thành phép so sánh hai topology. `--topology` hiện chỉ ghi nhãn
+JSON; Member 2 phải bổ sung mode/harness trỏ tới standalone deployment thật, cô lập
+với distributed baseline và chạy cùng workload trước Final Code Freeze.
 
 Nguyên liệu báo cáo và slide của Nhóm trưởng:
 

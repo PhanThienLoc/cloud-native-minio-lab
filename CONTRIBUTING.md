@@ -14,6 +14,27 @@ Chúng ta sử dụng mô hình **Gitflow** đơn giản hóa:
 
 > **Lưu ý:** Tuyệt đối không commit trực tiếp lên nhánh `main` hoặc `develop`. Luôn tạo Pull Request (PR) để được review.
 
+### Infrastructure Freeze và Final Code Freeze Tuần 5
+
+Infrastructure Freeze có hiệu lực từ baseline `develop` tại commit `2245087`
+(PR #13). Final Code Freeze **chưa có hiệu lực** vì vẫn còn deliverable bắt buộc
+trong roadmap chưa hoàn thành.
+
+- Không thay đổi distributed baseline, endpoint, resource limits hoặc cấu hình
+  monitoring đang dùng làm mốc benchmark.
+- Vẫn cho phép `feat:` cho deliverable cũ đã được roadmap phê duyệt và được liệt
+  kê trong tài liệu freeze, ví dụ benchmark mode/harness, checksum và IAM.
+- Không được gọi một tính năng còn thiếu là `fix:` chỉ để lách quy tắc freeze.
+- Sau khi các blocker được đóng và Final Code Freeze được công bố, chỉ chấp nhận
+  branch/commit loại `fix:` hoặc `docs:`.
+- Hotfix phải mô tả lỗi, phạm vi ảnh hưởng, bằng chứng kiểm thử và kế hoạch
+  rollback; Nhóm trưởng quyết định có cho phép merge hay không.
+- Mọi PR vẫn phải đi qua `develop`, CI và review. Không push trực tiếp vào
+  `develop` hoặc `main`.
+- `main` chỉ nhận milestone đã ổn định từ `develop`.
+
+Chi tiết tại [`docs/governance/week5-code-freeze.md`](docs/governance/week5-code-freeze.md).
+
 ## 2. Quy tắc đặt tên Commit Message
 
 Sử dụng chuẩn **Conventional Commits** để lịch sử git rõ ràng và chuyên nghiệp. Cấu trúc:
@@ -57,6 +78,10 @@ Sử dụng chuẩn **Conventional Commits** để lịch sử git rõ ràng và
    - Mô tả rõ ràng những gì đã thay đổi.
    - Yêu cầu ít nhất 1 thành viên khác review trước khi merge.
 6. **Merge**: Sau khi được approve, tiến hành merge và xóa nhánh cũ.
+
+Trong giai đoạn Infrastructure Freeze, workflow `feat/*` ở trên chỉ áp dụng cho
+deliverable tồn đọng đã được phê duyệt trong roadmap. Sau Final Code Freeze,
+không tạo `feat/*`; chỉ dùng `fix/*` hoặc `docs/*` theo chính sách ở mục 1.
 
 ## 4. Tiêu chuẩn mã nguồn (Code Standards)
 

@@ -14,6 +14,20 @@ Chúng ta sử dụng mô hình **Gitflow** đơn giản hóa:
 
 > **Lưu ý:** Tuyệt đối không commit trực tiếp lên nhánh `main` hoặc `develop`. Luôn tạo Pull Request (PR) để được review.
 
+### Code Freeze từ Tuần 5
+
+Code Freeze có hiệu lực từ baseline `develop` tại commit `2245087` (PR #13).
+
+- Chỉ chấp nhận branch và commit loại `fix:` hoặc `docs:`.
+- Từ chối `feat:` và mọi thay đổi mở rộng chức năng ngoài roadmap đã chốt.
+- Hotfix phải mô tả lỗi, phạm vi ảnh hưởng, bằng chứng kiểm thử và kế hoạch
+  rollback; Nhóm trưởng quyết định có cho phép merge hay không.
+- Mọi PR vẫn phải đi qua `develop`, CI và review. Không push trực tiếp vào
+  `develop` hoặc `main`.
+- `main` chỉ nhận milestone đã ổn định từ `develop`.
+
+Chi tiết tại [`docs/governance/week5-code-freeze.md`](docs/governance/week5-code-freeze.md).
+
 ## 2. Quy tắc đặt tên Commit Message
 
 Sử dụng chuẩn **Conventional Commits** để lịch sử git rõ ràng và chuyên nghiệp. Cấu trúc:

@@ -193,9 +193,12 @@ CPU/RAM của host.
 
 Source hiện tại:
 
-- scripts/data_ingestion.py mới tạo file partition mẫu, chưa upload S3.
-- scripts/connect_test.py đã có và dùng boto3 + python-dotenv để upload/download qua Nginx Load Balancer.
-- scripts/mc_setup.sh mới tạo một bucket mặc định và cần Member 3 review trước khi dùng như deliverable 3 bucket.
+- `scripts/data_ingestion.py` đã upload dataset lên MinIO qua Nginx, tạo object key
+  theo `data_type/year/month/day`, gắn metadata, retry lỗi tạm thời và xác minh object.
+- `scripts/connect_test.py` dùng boto3 + python-dotenv để upload/download qua Nginx
+  Load Balancer và kiểm tra SHA256.
+- `scripts/mc_setup.sh` mới tạo một bucket mặc định và cần Member 3 review trước khi
+  dùng như deliverable ba bucket.
 
 Flow kiểm thử hiện tại. Dataset cần được tạo lại nếu đã bị xóa sau validation
 Tuần 1:
@@ -268,9 +271,44 @@ Giới hạn tối đa của lab là `512 MiB RAM` và `0.50 CPU` cho mỗi serv
 và Grafana. Trước load test 5.000 object, chạy thử 100 object và theo dõi Docker
 Desktop; giảm threads nếu host dùng trên 80% RAM.
 
-## 8. Tuần 5: benchmark
+## 8. Tuần 5: Code Freeze, readiness và benchmark
 
-Mỗi benchmark cần ghi topology 1 node hoặc 4 node, workload, object size, concurrency, latency, throughput, success/error rate, host resource và commit cấu hình. Không so sánh hai kết quả nếu workload hoặc tài nguyên host khác nhau.
+Code Freeze áp dụng từ baseline `develop` tại commit `2245087`. Chỉ nhận PR `fix:`
+hoặc `docs:` qua `develop`; không nhận `feat:` và không push trực tiếp vào nhánh tích
+hợp. Quy định đầy đủ nằm tại
+[`governance/week5-code-freeze.md`](governance/week5-code-freeze.md).
+
+Kiểm tra file môi trường và cấu hình trước khi khởi động:
+
+~~~powershell
+docker compose --env-file .env -f infra/docker-compose.yml config --quiet
+docker compose --env-file .env -f infra/docker-compose.yml up -d
+docker compose --env-file .env -f infra/docker-compose.yml ps
+~~~
+
+Để kiểm tra persistence của stack chính, chỉ dùng `down` không kèm `-v`, sau đó
+khởi động lại bằng lệnh `up -d`. Không chạy `down -v` trên project chính vì thao tác
+đó xóa tám volume MinIO cùng volume Prometheus/Grafana.
+
+Fresh bootstrap đã được xác minh bằng một Compose project cô lập với volume riêng,
+không xóa dữ liệu của stack chính. Kết quả chi tiết nằm tại
+[`validation/week5-teamlead-readiness.md`](validation/week5-teamlead-readiness.md).
+
+Mỗi benchmark cần ghi topology 1 node hoặc 4 node, workload, object size,
+concurrency, latency, throughput, success/error rate, tài nguyên host và commit cấu
+hình. Không so sánh hai kết quả nếu workload, resource limit hoặc host khác nhau.
+Benchmark Standalone-vs-Distributed là deliverable của Member 2; baseline 4 node
+Tuần 4 không tự tạo thành phép so sánh hai topology.
+
+Nguyên liệu báo cáo và slide của Nhóm trưởng:
+
+- Phân tích CAP, NFS và MinIO:
+  [`reports/week5-cap-cloud-native-and-future.md`](reports/week5-cap-cloud-native-and-future.md).
+- Handoff sơ đồ, cấu hình và số liệu đã xác minh:
+  [`meeting_logs/week5-slide-handoff.md`](meeting_logs/week5-slide-handoff.md).
+
+Screenshot Grafana và video startup phải được chụp/quay từ runtime thật. Nếu chưa có
+artifact thì ghi `Not captured` hoặc `Not recorded`, không dùng ảnh hay kết quả giả lập.
 
 ## 9. Tuần 6: chaos engineering
 

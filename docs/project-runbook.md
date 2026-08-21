@@ -220,18 +220,53 @@ Script kết nối ghi lại latency upload/download cơ bản để làm mốc 
 
 ## 7. Tuần 4: observability và load testing
 
-Endpoint monitoring hiện có:
+Thêm credential Grafana vào `.env`; không commit giá trị thật:
+
+~~~dotenv
+GF_SECURITY_ADMIN_USER=<GRAFANA_ADMIN_USER>
+GF_SECURITY_ADMIN_PASSWORD=<GRAFANA_ADMIN_PASSWORD>
+~~~
+
+Khởi động stack từ thư mục gốc repository:
+
+~~~powershell
+docker compose --env-file .env -f infra/docker-compose.yml config --quiet
+docker compose --env-file .env -f infra/docker-compose.yml up -d
+docker compose --env-file .env -f infra/docker-compose.yml ps
+~~~
+
+Endpoint monitoring:
 
 - Prometheus: http://localhost:9090
 - Grafana: http://localhost:3000
 
-Khởi động:
+Prometheus scrape ba nhóm endpoint từ cả bốn node:
+
+- `minio-cluster`: `/minio/v2/metrics/cluster` cho storage/object metrics;
+- `minio-node`: `/minio/v2/metrics/node` cho throughput và S3 request metrics.
+- `minio-api`: `/minio/metrics/v3/api/requests` cho request rate theo API
+  operation như `GetObject`, `PutObject` và `DeleteObject`.
+
+Kiểm tra tại http://localhost:9090/targets. Cả mười hai MinIO target phải có trạng
+thái `UP`. MinIO metrics được cấu hình `public` cho lab, nhưng port `9000` của từng
+node không được publish ra host; chỉ container trong `minio-net` truy cập trực
+tiếp được metrics endpoint.
+
+Grafana tự provision datasource Prometheus và dashboard `MinIO Cluster Overview`.
+Dashboard gồm throughput, request rate, storage usage, object count và trạng thái
+bốn node. Không cần import dashboard thủ công.
+
+Kiểm tra health và log:
 
 ~~~powershell
-docker compose --env-file .env -f infra/docker-compose.yml up -d prometheus grafana
+curl.exe -i http://localhost:9090/-/healthy
+curl.exe -i http://localhost:3000/api/health
+docker compose --env-file .env -f infra/docker-compose.yml logs --tail=100 prometheus grafana
 ~~~
 
-Gap hiện tại: infra/prometheus/prometheus.yml chỉ self-scrape Prometheus, chưa scrape MinIO metrics. Trước load test cần bổ sung và kiểm chứng request rate, latency, throughput, object/storage usage và node availability.
+Giới hạn tối đa của lab là `512 MiB RAM` và `0.50 CPU` cho mỗi service Prometheus
+và Grafana. Trước load test 5.000 object, chạy thử 100 object và theo dõi Docker
+Desktop; giảm threads nếu host dùng trên 80% RAM.
 
 ## 8. Tuần 5: benchmark
 

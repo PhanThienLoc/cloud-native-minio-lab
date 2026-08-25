@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -29,10 +28,9 @@ SECRET_KEY = (
 )
 
 BUCKET = "raw-data"
-
+PREFIX = "load-test/"
 WORKERS = 8
-OBJECT_COUNT = 100
-OBJECT_SIZE = 1024 * 100  # 100 KB
+DOWNLOAD_COUNT = 100
 
 
 def create_client():
@@ -49,49 +47,54 @@ def create_client():
     )
 
 
-def upload_object(index: int) -> str:
+def download_object(key: str) -> str:
     s3 = create_client()
+    response = s3.get_object(Bucket=BUCKET, Key=key)
 
-    key = f"load-test/{uuid.uuid4()}-{index}.bin"
+    while response["Body"].read(1024 * 1024):
+        pass
 
-    payload = os.urandom(OBJECT_SIZE)
-
-    s3.put_object(
-        Bucket=BUCKET,
-        Key=key,
-        Body=payload,
-        ContentType="application/octet-stream",
-    )
-
+    response["Body"].close()
     return key
 
 
-def main() -> None:
+def main():
+    s3 = create_client()
+
     print("=" * 60)
-    print("MINIO LOAD TEST")
+    print("MINIO DOWNLOAD LOAD TEST")
     print("=" * 60)
     print(f"Endpoint : {ENDPOINT_URL}")
     print(f"Bucket   : {BUCKET}")
-    print(f"Objects  : {OBJECT_COUNT}")
-    print(f"Size     : {OBJECT_SIZE / 1024:.0f} KB/object")
     print(f"Workers  : {WORKERS}")
-    print()
 
-    s3 = create_client()
+    keys = []
 
-    try:
-        s3.head_bucket(Bucket=BUCKET)
-    except Exception as error:
-        print(f"[ERROR] Cannot access bucket '{BUCKET}': {error}")
+    paginator = s3.get_paginator("list_objects_v2")
+
+    for page in paginator.paginate(
+        Bucket=BUCKET,
+        Prefix=PREFIX,
+    ):
+        for item in page.get("Contents", []):
+            keys.append(item["Key"])
+
+    if not keys:
+        print("[ERROR] No load-test objects found.")
         return
+
+    keys = keys[:DOWNLOAD_COUNT]
+
+    print(f"Objects  : {len(keys)}")
+    print()
 
     success = 0
     failed = 0
 
     with ThreadPoolExecutor(max_workers=WORKERS) as executor:
         futures = [
-            executor.submit(upload_object, index)
-            for index in range(OBJECT_COUNT)
+            executor.submit(download_object, key)
+            for key in keys
         ]
 
         for future in as_completed(futures):
@@ -105,9 +108,9 @@ def main() -> None:
 
     print()
     print("=" * 60)
-    print("LOAD TEST SUMMARY")
+    print("DOWNLOAD TEST SUMMARY")
     print("=" * 60)
-    print(f"Total   : {OBJECT_COUNT}")
+    print(f"Total   : {len(keys)}")
     print(f"Success : {success}")
     print(f"Failed  : {failed}")
     print("=" * 60)

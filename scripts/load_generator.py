@@ -1,8 +1,9 @@
-"""Generate concurrent S3 upload load and write a reproducible JSON report."""
+"""Generate concurrent S3 upload load and write a reproducible JSON & CSV report."""
 
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import logging
 import math
@@ -39,12 +40,16 @@ MAX_THREADS = 128
 MAX_FILE_SIZE_BYTES = 1024**3
 MAX_TOTAL_BYTES = 10 * 1024**3
 MAX_INFLIGHT_BYTES = 512 * 1024**2
+
+# Bổ sung SlowDownWrite đặc thù của MinIO cluster
 TRANSIENT_S3_CODES = {
     "InternalError",
     "RequestTimeout",
     "RequestTimeoutException",
     "ServiceUnavailable",
     "SlowDown",
+    "SlowDownWrite",
+    "503",
 }
 
 logging.basicConfig(
@@ -58,7 +63,7 @@ T = TypeVar("T")
 
 @dataclass(frozen=True)
 class S3Settings:
-    """Connection settings loaded from environment variables."""
+    """Connection settings loaded from environment variables or CLI mode."""
 
     endpoint_url: str
     access_key: str = field(repr=False)
@@ -79,22 +84,13 @@ class OperationFailed(RuntimeError):
 
 
 def parse_size(size_text: str) -> int:
-    """Convert a size such as 1MB or 512KB to bytes."""
-    match = re.fullmatch(
-        r"(\d+(?:\.\d+)?)\s*([a-zA-Z]+)?",
-        size_text.strip(),
-    )
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)\s*([a-zA-Z]+)?", size_text.strip())
     if not match:
         raise ValueError(f"Invalid size: {size_text}")
 
     value = float(match.group(1))
     unit = (match.group(2) or "B").upper()
-    units = {
-        "B": 1,
-        "KB": 1024,
-        "MB": 1024**2,
-        "GB": 1024**3,
-    }
+    units = {"B": 1, "KB": 1024, "MB": 1024**2, "GB": 1024**3}
     if unit not in units:
         raise ValueError(f"Unsupported unit: {unit}. Use B, KB, MB, or GB.")
 
@@ -107,8 +103,6 @@ def parse_size(size_text: str) -> int:
 
 
 def bounded_positive_int(maximum: int) -> Callable[[str], int]:
-    """Build an argparse validator for a positive bounded integer."""
-
     def parse(value: str) -> int:
         try:
             number = int(value)
@@ -126,7 +120,6 @@ def bounded_positive_int(maximum: int) -> Callable[[str], int]:
 
 
 def size_argument(value: str) -> int:
-    """Validate a file-size CLI argument."""
     try:
         return parse_size(value)
     except ValueError as error:
@@ -134,16 +127,13 @@ def size_argument(value: str) -> int:
 
 
 def bucket_argument(value: str) -> str:
-    """Validate the subset of S3 bucket naming rules used by this lab."""
     bucket = value.strip()
     if not re.fullmatch(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]", bucket):
         raise argparse.ArgumentTypeError(
             "Bucket must contain 3-63 lowercase letters, digits, dots, or hyphens."
         )
     if ".." in bucket:
-        raise argparse.ArgumentTypeError(
-            "Bucket name must not contain consecutive dots."
-        )
+        raise argparse.ArgumentTypeError("Bucket name must not contain consecutive dots.")
     return bucket
 
 
@@ -152,36 +142,33 @@ def validate_workload(
     threads: int,
     file_size_bytes: int,
 ) -> tuple[int, int]:
-    """Validate total and concurrently allocated payload sizes."""
     planned_total_bytes = num_files * file_size_bytes
     if planned_total_bytes > MAX_TOTAL_BYTES:
         raise ValueError(
-            "Planned workload exceeds 10GiB. "
-            "Reduce --num-files or --file-size."
+            "Planned workload exceeds 10GiB. Reduce --num-files or --file-size."
         )
 
     inflight_bytes = min(threads, num_files) * file_size_bytes
     if inflight_bytes > MAX_INFLIGHT_BYTES:
         raise ValueError(
-            "Concurrent in-memory payload exceeds 512MiB. "
-            "Reduce --threads or --file-size."
+            "Concurrent in-memory payload exceeds 512MiB. Reduce --threads or --file-size."
         )
     return planned_total_bytes, inflight_bytes
 
 
-def load_settings() -> S3Settings:
-    """Load endpoint and one complete credential pair without hardcoded secrets."""
-    endpoint_url = os.getenv("ENDPOINT_URL", "http://localhost:9000").strip()
-    if not endpoint_url:
-        raise ConfigurationError("ENDPOINT_URL must not be empty.")
+def load_settings(mode: str) -> S3Settings:
+    """Load settings with dynamic endpoint mapping based on mode."""
+    mode_endpoints = {
+        "standalone": "http://localhost:9001",
+        "distributed": "http://localhost:9000",
+    }
+    
+    # Ưu tiên lấy từ mode; nếu có biến môi trường ENDPOINT_URL thì có thể ghi đè
+    endpoint_url = os.getenv("ENDPOINT_URL", mode_endpoints.get(mode, "http://localhost:9000")).strip()
 
     app_access_key = os.getenv("AWS_ACCESS_KEY_ID", "").strip()
     app_secret_key = os.getenv("AWS_SECRET_ACCESS_KEY", "").strip()
-    if app_access_key or app_secret_key:
-        if not app_access_key or not app_secret_key:
-            raise ConfigurationError(
-                "AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY must be set together."
-            )
+    if app_access_key and app_secret_key:
         return S3Settings(
             endpoint_url=endpoint_url,
             access_key=app_access_key,
@@ -189,22 +176,17 @@ def load_settings() -> S3Settings:
             credential_source="application",
         )
 
-    root_access_key = os.getenv("MINIO_ROOT_USER", "").strip()
-    root_secret_key = os.getenv("MINIO_ROOT_PASSWORD", "").strip()
-    if not root_access_key or not root_secret_key:
-        raise ConfigurationError(
-            "Set application credentials or both MinIO root variables in .env."
-        )
+    root_access_key = os.getenv("MINIO_ROOT_USER", "minioadmin").strip()
+    root_secret_key = os.getenv("MINIO_ROOT_PASSWORD", "minioadmin").strip()
     return S3Settings(
         endpoint_url=endpoint_url,
         access_key=root_access_key,
         secret_key=root_secret_key,
-        credential_source="root-lab-fallback",
+        credential_source="minioadmin-fallback",
     )
 
 
 def build_s3_client(settings: S3Settings):
-    """Create a client with SDK retries disabled so this script owns retry count."""
     return boto3.client(
         "s3",
         endpoint_url=settings.endpoint_url,
@@ -212,16 +194,15 @@ def build_s3_client(settings: S3Settings):
         aws_secret_access_key=settings.secret_key,
         config=Config(
             signature_version="s3v4",
-            connect_timeout=3,
+            connect_timeout=5,
             read_timeout=30,
-            max_pool_connections=2,
+            max_pool_connections=16,
             retries={"mode": "standard", "total_max_attempts": 1},
         ),
     )
 
 
 def get_thread_client(settings: S3Settings):
-    """Reuse one boto3 client per worker thread."""
     client = getattr(thread_state, "s3_client", None)
     if client is None:
         client = build_s3_client(settings)
@@ -230,7 +211,6 @@ def get_thread_client(settings: S3Settings):
 
 
 def is_transient_error(error: Exception) -> bool:
-    """Return true only for connection failures, timeouts, throttling, or S3 5xx."""
     if isinstance(
         error,
         (
@@ -258,7 +238,6 @@ def run_with_retry(
     operation: Callable[[], T],
     description: str,
 ) -> tuple[T, int]:
-    """Run an S3 operation at most three times for transient failures."""
     for attempt in range(1, MAX_ATTEMPTS + 1):
         try:
             return operation(), attempt
@@ -289,7 +268,6 @@ def run_with_retry(
 
 
 def preflight(settings: S3Settings, bucket_name: str) -> None:
-    """Verify endpoint, credentials, and destination bucket before scheduling load."""
     client = build_s3_client(settings)
     run_with_retry(
         lambda: client.head_bucket(Bucket=bucket_name),
@@ -304,31 +282,24 @@ def upload_worker(
     object_index: int,
     file_size_bytes: int,
 ) -> dict[str, Any]:
-    """Generate one in-memory object and upload it with bounded retries."""
-    object_key = (
-        f"{object_prefix}/object-{object_index:06d}-{uuid.uuid4().hex}.bin"
-    )
+    object_key = f"{object_prefix}/object-{object_index:06d}-{uuid.uuid4().hex}.bin"
     start_time: float | None = None
     attempts = 0
 
     try:
         payload = os.urandom(file_size_bytes)
         client = get_thread_client(settings)
-        # Measure the S3 operation, not local random-payload generation.
         start_time = time.perf_counter()
         _, attempts = run_with_retry(
             lambda: client.put_object(
                 Bucket=bucket_name,
                 Key=object_key,
                 Body=payload,
-                Metadata={
-                    "generated-by": "load-generator",
-                    "object-index": str(object_index),
-                },
             ),
             f"Upload object {object_index}",
         )
         return {
+            "object_index": object_index,
             "success": True,
             "latency_ms": (time.perf_counter() - start_time) * 1000,
             "bytes": file_size_bytes,
@@ -341,8 +312,8 @@ def upload_worker(
     except Exception as error:
         message = f"Unexpected worker error: {error}"
 
-    logger.error("Object %d failed: %s", object_index, message)
     return {
+        "object_index": object_index,
         "success": False,
         "latency_ms": (
             (time.perf_counter() - start_time) * 1000
@@ -356,7 +327,6 @@ def upload_worker(
 
 
 def percentile(values: list[float], percent: float) -> float:
-    """Calculate a linearly interpolated percentile without numpy."""
     if not values:
         return 0.0
     ordered = sorted(values)
@@ -376,90 +346,6 @@ def percentile(values: list[float], percent: float) -> float:
     )
 
 
-def git_output(*arguments: str) -> str:
-    """Read concise Git metadata without failing outside a Git checkout."""
-    try:
-        result = subprocess.run(
-            ["git", *arguments],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=3,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return "unknown"
-    return result.stdout.strip()
-
-
-def working_tree_is_dirty() -> bool | str:
-    """Report whether runtime code differs from its recorded commit."""
-    status = git_output("status", "--porcelain")
-    if status == "unknown":
-        return "unknown"
-    return bool(status)
-
-
-def total_memory_bytes() -> int | None:
-    """Return physical host memory using only the Python standard library."""
-    try:
-        if os.name == "nt":
-            import ctypes
-
-            class MemoryStatus(ctypes.Structure):
-                _fields_ = [
-                    ("length", ctypes.c_ulong),
-                    ("memory_load", ctypes.c_ulong),
-                    ("total_physical", ctypes.c_ulonglong),
-                    ("available_physical", ctypes.c_ulonglong),
-                    ("total_page_file", ctypes.c_ulonglong),
-                    ("available_page_file", ctypes.c_ulonglong),
-                    ("total_virtual", ctypes.c_ulonglong),
-                    ("available_virtual", ctypes.c_ulonglong),
-                    ("available_extended_virtual", ctypes.c_ulonglong),
-                ]
-
-            status = MemoryStatus()
-            status.length = ctypes.sizeof(MemoryStatus)
-            if ctypes.windll.kernel32.GlobalMemoryStatusEx(
-                ctypes.byref(status)
-            ):
-                return int(status.total_physical)
-            return None
-
-        page_size = os.sysconf("SC_PAGE_SIZE")
-        page_count = os.sysconf("SC_PHYS_PAGES")
-        return int(page_size * page_count)
-    except (AttributeError, OSError, ValueError):
-        return None
-
-
-def host_context() -> dict[str, Any]:
-    """Capture host context needed to interpret benchmark results."""
-    memory_bytes = total_memory_bytes()
-    try:
-        disk = shutil.disk_usage(Path.cwd())
-    except OSError:
-        disk = None
-
-    return {
-        "platform": platform.system(),
-        "release": platform.release(),
-        "machine": platform.machine(),
-        "cpu_count": os.cpu_count(),
-        "memory_gib": (
-            round(memory_bytes / (1024**3), 2)
-            if memory_bytes is not None
-            else "unknown"
-        ),
-        "disk_total_gib": (
-            round(disk.total / (1024**3), 2) if disk is not None else "unknown"
-        ),
-        "disk_free_gib": (
-            round(disk.free / (1024**3), 2) if disk is not None else "unknown"
-        ),
-    }
-
-
 def build_report(
     *,
     settings: S3Settings,
@@ -472,7 +358,6 @@ def build_report(
     results: list[dict[str, Any]],
     total_duration: float,
 ) -> dict[str, Any]:
-    """Build a report containing workload, context, performance, and failures."""
     successful = [result for result in results if result["success"]]
     failed = [result for result in results if not result["success"]]
     latencies = [result["latency_ms"] for result in successful]
@@ -485,26 +370,15 @@ def build_report(
     return {
         "schema_version": 1,
         "context": {
-            "timestamp_utc": datetime.now(timezone.utc)
-            .isoformat()
-            .replace("+00:00", "Z"),
-            "branch": git_output("branch", "--show-current"),
-            "commit": git_output("rev-parse", "HEAD"),
-            "working_tree_dirty": working_tree_is_dirty(),
+            "timestamp_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "endpoint": settings.endpoint_url,
             "bucket": bucket_name,
-            "topology": topology,
-            "credential_source": settings.credential_source,
-            "object_prefix": object_prefix,
-            "host": host_context(),
+            "mode": topology,
         },
         "workload": {
             "num_files": num_files,
             "threads": threads,
             "file_size_bytes": file_size_bytes,
-            "planned_total_bytes": num_files * file_size_bytes,
-            "planned_inflight_bytes": min(threads, num_files)
-            * file_size_bytes,
         },
         "performance": {
             "total_duration_sec": round(total_duration, 4),
@@ -523,54 +397,45 @@ def build_report(
             "p95": round(percentile(latencies, 95), 4),
             "p99": round(percentile(latencies, 99), 4),
         },
-        "retry": {
-            "max_attempts": MAX_ATTEMPTS,
-            "requests_retried": sum(
-                1 for result in results if result["attempts"] > 1
-            ),
-        },
         "failures": {
             "by_error": dict(error_counts.most_common(10)),
         },
     }
 
 
-def write_report(report: dict[str, Any], output_path: Path) -> None:
-    """Write JSON output to an explicit path."""
+def write_outputs(report: dict[str, Any], results: list[dict[str, Any]], output_path: Path) -> None:
+    """Ghi cả file JSON tổng hợp và file CSV chi tiết từng request."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(
-        json.dumps(report, indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-    )
+    
+    # 1. Ghi file JSON
+    json_path = output_path.with_suffix(".json")
+    json_path.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    
+    # 2. Ghi file CSV
+    csv_path = output_path.with_suffix(".csv")
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["Task_ID", "Success", "Latency_ms", "Bytes", "Attempts", "Error"])
+        for r in results:
+            w.writerow([r["object_index"], r["success"], f"{r['latency_ms']:.2f}", r["bytes"], r["attempts"], r["error"]])
+    
+    logger.info("Saved reports to: %s and %s", json_path, csv_path)
 
 
 def print_report(report: dict[str, Any], output_path: Path) -> None:
-    """Print the required benchmark summary without exposing credentials."""
     performance = report["performance"]
     latency = report["latency_ms"]
     print("\n" + "=" * 60)
     print("LOAD GENERATOR RESULT")
     print("=" * 60)
-    print(
-        f"Duration      : {performance['total_duration_sec']:.4f} seconds"
-    )
-    print(
-        "Throughput    : "
-        f"{performance['average_throughput_mib_s']:.4f} MiB/s"
-    )
-    print(
-        "Success       : "
-        f"{performance['total_success']} "
-        f"({performance['success_rate_percent']:.2f}%)"
-    )
-    print(
-        "Failure       : "
-        f"{performance['total_failed']} "
-        f"({performance['failure_rate_percent']:.2f}%)"
-    )
-    print(f"Average       : {latency['average']:.4f} ms")
-    print(f"P95 / P99     : {latency['p95']:.4f} / {latency['p99']:.4f} ms")
-    print(f"Result file   : {output_path}")
+    print(f"Mode / Topology: {report['context']['mode']}")
+    print(f"Duration       : {performance['total_duration_sec']:.4f} seconds")
+    print(f"Throughput     : {performance['average_throughput_mib_s']:.4f} MiB/s")
+    print(f"Success        : {performance['total_success']} ({performance['success_rate_percent']:.2f}%)")
+    print(f"Failure        : {performance['total_failed']} ({performance['failure_rate_percent']:.2f}%)")
+    print(f"Average Latency: {latency['average']:.4f} ms")
+    print(f"P95 / P99      : {latency['p95']:.4f} / {latency['p99']:.4f} ms")
+    print(f"Result files   : {output_path.with_suffix('.json')} | {output_path.with_suffix('.csv')}")
     print("=" * 60)
 
 
@@ -584,75 +449,29 @@ def run_load_generator(
     file_size_bytes: int,
     output_path: Path,
 ) -> int:
-    """Run preflight, concurrent uploads, and report generation."""
-    logger.info(
-        "Preflight endpoint=%s bucket=%s credential_source=%s",
-        settings.endpoint_url,
-        bucket_name,
-        settings.credential_source,
-    )
+    logger.info("Preflight endpoint=%s bucket=%s", settings.endpoint_url, bucket_name)
     try:
         preflight(settings, bucket_name)
-    except OperationFailed as error:
-        logger.error("Ingestion preflight failed: %s", error)
-        return 1
     except Exception as error:
-        logger.error("Preflight setup failed: %s", error)
+        logger.error("Preflight check failed on bucket '%s': %s", bucket_name, error)
         return 1
 
-    run_id = (
-        datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        + "-"
-        + uuid.uuid4().hex[:8]
-    )
+    run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8]
     object_prefix = f"load-test/run_id={run_id}"
-    logger.info(
-        "Starting load: files=%d threads=%d size=%d prefix=%s",
-        num_files,
-        threads,
-        file_size_bytes,
-        object_prefix,
-    )
+    logger.info("Starting load: files=%d threads=%d size=%d mode=%s", num_files, threads, file_size_bytes, topology)
 
     results: list[dict[str, Any]] = []
     wall_start = time.perf_counter()
-    with ThreadPoolExecutor(
-        max_workers=threads,
-        thread_name_prefix="minio-load",
-    ) as executor:
+    with ThreadPoolExecutor(max_workers=threads, thread_name_prefix="minio-load") as executor:
         futures = [
-            executor.submit(
-                upload_worker,
-                settings,
-                bucket_name,
-                object_prefix,
-                object_index,
-                file_size_bytes,
-            )
-            for object_index in range(1, num_files + 1)
+            executor.submit(upload_worker, settings, bucket_name, object_prefix, i, file_size_bytes)
+            for i in range(1, num_files + 1)
         ]
         progress_interval = max(1, num_files // 10)
         for completed, future in enumerate(as_completed(futures), 1):
-            try:
-                results.append(future.result())
-            except Exception as error:
-                logger.error("Unexpected future error: %s", error)
-                results.append(
-                    {
-                        "success": False,
-                        "latency_ms": 0.0,
-                        "bytes": 0,
-                        "attempts": 0,
-                        "error": f"Unexpected future error: {error}",
-                    }
-                )
+            results.append(future.result())
             if completed % progress_interval == 0 or completed == num_files:
-                logger.info(
-                    "Progress %d/%d (%.1f%%)",
-                    completed,
-                    num_files,
-                    completed / num_files * 100,
-                )
+                logger.info("Progress %d/%d (%.1f%%)", completed, num_files, completed / num_files * 100)
 
     total_duration = time.perf_counter() - wall_start
     report = build_report(
@@ -666,74 +485,69 @@ def run_load_generator(
         results=results,
         total_duration=total_duration,
     )
-    write_report(report, output_path)
+    write_outputs(report, results, output_path)
     print_report(report, output_path)
     return 0 if report["performance"]["total_failed"] == 0 else 1
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Build the command-line interface."""
-    parser = argparse.ArgumentParser(
-        description="Generate concurrent upload load against MinIO through Nginx."
-    )
+    parser = argparse.ArgumentParser(description="MinIO Benchmark Load Generator CLI")
     parser.add_argument(
         "--num-files",
         type=bounded_positive_int(MAX_FILES),
         required=True,
-        help=f"Number of objects to upload (maximum {MAX_FILES:,}).",
+        help=f"Number of objects to upload (max {MAX_FILES:,}).",
     )
     parser.add_argument(
         "--threads",
         type=bounded_positive_int(MAX_THREADS),
         required=True,
-        help=f"Concurrent worker threads (maximum {MAX_THREADS}).",
+        help=f"Concurrent worker threads (max {MAX_THREADS}).",
     )
     parser.add_argument(
         "--file-size",
         type=size_argument,
         required=True,
         metavar="SIZE",
-        help="Object size such as 100KB or 1MB (maximum 1GB).",
+        help="Object size (e.g., 512KB, 1MB).",
+    )
+    parser.add_argument(
+        "--mode",
+        "--topology",
+        dest="mode",
+        choices=["standalone", "distributed"],
+        default="distributed",
+        help="Test mode: 'standalone' (1 node :9001) or 'distributed' (Nginx LB :9000)",
     )
     parser.add_argument(
         "--bucket",
         type=bucket_argument,
-        default="raw-data",
-        help="Existing destination bucket (default: raw-data).",
-    )
-    parser.add_argument(
-        "--topology",
-        default="distributed-4-node",
-        help="Topology label stored in the JSON report.",
+        default="benchmark-bucket",
+        help="Destination bucket name (default: benchmark-bucket).",
     )
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("benchmark_results.json"),
-        help="JSON result path (default: benchmark_results.json).",
+        default=Path("benchmark_results"),
+        help="Base path for JSON and CSV output files.",
     )
     return parser
 
 
 def main() -> int:
-    """CLI entrypoint."""
     load_dotenv()
     parser = build_parser()
     args = parser.parse_args()
     try:
         validate_workload(args.num_files, args.threads, args.file_size)
-    except ValueError as error:
-        parser.error(str(error))
-
-    try:
-        settings = load_settings()
-    except ConfigurationError as error:
+        settings = load_settings(args.mode)
+    except (ValueError, ConfigurationError) as error:
         parser.error(str(error))
 
     return run_load_generator(
         settings=settings,
         bucket_name=args.bucket,
-        topology=args.topology,
+        topology=args.mode,
         num_files=args.num_files,
         threads=args.threads,
         file_size_bytes=args.file_size,

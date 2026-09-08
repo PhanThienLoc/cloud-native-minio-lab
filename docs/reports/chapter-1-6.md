@@ -223,15 +223,18 @@ Mẫu chạy benchmark distributed:
 
 ```powershell
 cd scripts
-python load_generator.py --num-files 5000 --threads 8 --file-size 1MB --mode distributed --output distributed_run1
+python load_generator.py --num-files 5000 --threads 8 --file-size 1MB --mode distributed --output ..\benchmark-results\raw\distributed_run1
 ```
 
-Kết quả sẽ được lưu tập trung (logs + JSON summary) trong thư mục `scripts` (ví dụ `distributed_run1.json`).
+Kết quả sẽ được lưu trong thư mục `benchmark-results/raw/` (ví dụ
+`benchmark-results/raw/distributed_run1.json`).
 
 
 ## Chương 5: Kết quả Kiểm thử và Đánh giá Hiệu năng
 
-> Phần này sử dụng kết quả đã lưu trong `scripts/` — `standalone_run1.json`, `standalone_run2.json`, `standalone_run3.json`, `distributed_run1.json`, `distributed_run2.json`, `distributed_run3.json`.
+> Phần này sử dụng kết quả đã lưu trong `benchmark-results/raw/` —
+> `standalone_run1.json`, `standalone_run2.json`, `standalone_run3.json`,
+> `distributed_run1.json`, `distributed_run2.json`, `distributed_run3.json`.
 
 ### 5.1 Tóm tắt workload
 

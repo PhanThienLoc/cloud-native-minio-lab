@@ -39,7 +39,7 @@ Bước 5: Chạy benchmark Kịch bản A
 
 PowerShell
 cd scripts
-python load_generator.py --num-files 5000 --threads 8 --file-size 1MB --mode standalone --output standalone_run1
+python load_generator.py --num-files 5000 --threads 8 --file-size 1MB --mode standalone --output ..\benchmark-results\raw\standalone_run1
 
 3. Kịch bản B: Test với 4 Node (Distributed)
 Bước 1: Xóa node Standalone
@@ -59,4 +59,4 @@ mc mb local/benchmark-bucket --ignore-existing
 Bước 4: Chạy benchmark Kịch bản B
 
 PowerShell
-python load_generator.py --num-files 5000 --threads 8 --file-size 1MB --mode distributed --output distributed_run1
+python load_generator.py --num-files 5000 --threads 8 --file-size 1MB --mode distributed --output ..\benchmark-results\raw\distributed_run1

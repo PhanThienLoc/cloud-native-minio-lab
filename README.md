@@ -1,4 +1,4 @@
-﻿# Phân Tán Hóa Lưu Trữ Dữ Liệu Lớn: Mô Phỏng Kiến Trúc Data Lake Bằng MinIO
+# Phân Tán Hóa Lưu Trữ Dữ Liệu Lớn: Mô Phỏng Kiến Trúc Data Lake Bằng MinIO
 
 Hệ thống triển khai cụm lưu trữ phân tán (Distributed Object Storage) mô phỏng kiến trúc S3, tập trung vào khả năng chịu lỗi (Fault Tolerance) và khả năng mở rộng (Scalability).
 

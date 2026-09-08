@@ -40,6 +40,36 @@ MAX_THREADS = 128
 MAX_FILE_SIZE_BYTES = 1024**3
 MAX_TOTAL_BYTES = 10 * 1024**3
 MAX_INFLIGHT_BYTES = 512 * 1024**2
+MINIO_IMAGE = (
+    "minio/minio@sha256:"
+    "14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e"
+)
+MODE_PROFILES: dict[str, dict[str, Any]] = {
+    "standalone": {
+        "endpoint_env": "STANDALONE_ENDPOINT_URL",
+        "default_endpoint": "http://localhost:9001",
+        "deployment_file": "infra/docker-compose.standalone.yml",
+        "services": ["minio-standalone"],
+        "total_cpu_limit": 4.0,
+        "total_memory_gib": 4.0,
+    },
+    "distributed": {
+        "endpoint_env": "DISTRIBUTED_ENDPOINT_URL",
+        "default_endpoint": "http://localhost:9000",
+        "deployment_file": "infra/docker-compose.yml",
+        "services": ["minio1", "minio2", "minio3", "minio4"],
+        "total_cpu_limit": 4.0,
+        "total_memory_gib": 4.0,
+    },
+}
+EXAMPLE_CREDENTIAL_VALUES = frozenset(
+    {
+        "change-me",
+        "change-me-minio-password",
+        "change-me-app-user",
+        "change-me-app-password",
+    }
+)
 
 # Bổ sung SlowDownWrite đặc thù của MinIO cluster
 TRANSIENT_S3_CODES = {
@@ -157,18 +187,27 @@ def validate_workload(
 
 
 def load_settings(mode: str) -> S3Settings:
-    """Load settings with dynamic endpoint mapping based on mode."""
-    mode_endpoints = {
-        "standalone": "http://localhost:9001",
-        "distributed": "http://localhost:9000",
-    }
-    
-    # Ưu tiên lấy từ mode; nếu có biến môi trường ENDPOINT_URL thì có thể ghi đè
-    endpoint_url = os.getenv("ENDPOINT_URL", mode_endpoints.get(mode, "http://localhost:9000")).strip()
+    """Load a deterministic mode endpoint and one complete credential pair."""
+    profile = MODE_PROFILES.get(mode)
+    if profile is None:
+        raise ConfigurationError(f"Unsupported benchmark mode: {mode}")
+
+    endpoint_env = str(profile["endpoint_env"])
+    endpoint_url = os.getenv(
+        endpoint_env,
+        str(profile["default_endpoint"]),
+    ).strip()
+    if not endpoint_url:
+        raise ConfigurationError(f"{endpoint_env} must not be empty.")
 
     app_access_key = os.getenv("AWS_ACCESS_KEY_ID", "").strip()
     app_secret_key = os.getenv("AWS_SECRET_ACCESS_KEY", "").strip()
-    if app_access_key and app_secret_key:
+    if app_access_key or app_secret_key:
+        if not app_access_key or not app_secret_key:
+            raise ConfigurationError(
+                "AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY must be set together."
+            )
+        reject_example_credentials(app_access_key, app_secret_key)
         return S3Settings(
             endpoint_url=endpoint_url,
             access_key=app_access_key,
@@ -176,14 +215,35 @@ def load_settings(mode: str) -> S3Settings:
             credential_source="application",
         )
 
-    root_access_key = os.getenv("MINIO_ROOT_USER", "minioadmin").strip()
-    root_secret_key = os.getenv("MINIO_ROOT_PASSWORD", "minioadmin").strip()
-    return S3Settings(
-        endpoint_url=endpoint_url,
-        access_key=root_access_key,
-        secret_key=root_secret_key,
-        credential_source="minioadmin-fallback",
+    root_access_key = os.getenv("MINIO_ROOT_USER", "").strip()
+    root_secret_key = os.getenv("MINIO_ROOT_PASSWORD", "").strip()
+    if root_access_key or root_secret_key:
+        if not root_access_key or not root_secret_key:
+            raise ConfigurationError(
+                "MINIO_ROOT_USER and MINIO_ROOT_PASSWORD must be set together."
+            )
+        reject_example_credentials(root_access_key, root_secret_key)
+        return S3Settings(
+            endpoint_url=endpoint_url,
+            access_key=root_access_key,
+            secret_key=root_secret_key,
+            credential_source="root-lab",
+        )
+
+    raise ConfigurationError(
+        "Set application credentials or both MinIO root variables in .env."
     )
+
+
+def reject_example_credentials(access_key: str, secret_key: str) -> None:
+    """Reject public sample values before they reach the S3 client."""
+    if (
+        access_key in EXAMPLE_CREDENTIAL_VALUES
+        or secret_key in EXAMPLE_CREDENTIAL_VALUES
+    ):
+        raise ConfigurationError(
+            "Replace placeholder credentials from .env.example before benchmarking."
+        )
 
 
 def build_s3_client(settings: S3Settings):
@@ -346,6 +406,103 @@ def percentile(values: list[float], percent: float) -> float:
     )
 
 
+def git_output(*arguments: str) -> str:
+    """Read concise Git metadata without failing outside a checkout."""
+    try:
+        result = subprocess.run(
+            ["git", *arguments],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+    return result.stdout.strip()
+
+
+def working_tree_is_dirty() -> bool | str:
+    """Report whether runtime source differs from its recorded commit."""
+    status = git_output("status", "--porcelain")
+    if status == "unknown":
+        return "unknown"
+    return bool(status)
+
+
+def total_memory_bytes() -> int | None:
+    """Return physical host memory using the Python standard library."""
+    try:
+        if os.name == "nt":
+            import ctypes
+
+            class MemoryStatus(ctypes.Structure):
+                _fields_ = [
+                    ("length", ctypes.c_ulong),
+                    ("memory_load", ctypes.c_ulong),
+                    ("total_physical", ctypes.c_ulonglong),
+                    ("available_physical", ctypes.c_ulonglong),
+                    ("total_page_file", ctypes.c_ulonglong),
+                    ("available_page_file", ctypes.c_ulonglong),
+                    ("total_virtual", ctypes.c_ulonglong),
+                    ("available_virtual", ctypes.c_ulonglong),
+                    ("available_extended_virtual", ctypes.c_ulonglong),
+                ]
+
+            status = MemoryStatus()
+            status.length = ctypes.sizeof(MemoryStatus)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(
+                ctypes.byref(status)
+            ):
+                return int(status.total_physical)
+            return None
+
+        page_size = os.sysconf("SC_PAGE_SIZE")
+        page_count = os.sysconf("SC_PHYS_PAGES")
+        return int(page_size * page_count)
+    except (AttributeError, OSError, ValueError):
+        return None
+
+
+def host_context() -> dict[str, Any]:
+    """Capture host context needed to interpret benchmark results."""
+    memory_bytes = total_memory_bytes()
+    try:
+        disk = shutil.disk_usage(Path.cwd())
+    except OSError:
+        disk = None
+
+    return {
+        "platform": platform.system(),
+        "release": platform.release(),
+        "machine": platform.machine(),
+        "cpu_count": os.cpu_count(),
+        "memory_gib": (
+            round(memory_bytes / (1024**3), 2)
+            if memory_bytes is not None
+            else "unknown"
+        ),
+        "disk_total_gib": (
+            round(disk.total / (1024**3), 2) if disk is not None else "unknown"
+        ),
+        "disk_free_gib": (
+            round(disk.free / (1024**3), 2) if disk is not None else "unknown"
+        ),
+    }
+
+
+def runtime_context(mode: str) -> dict[str, Any]:
+    """Describe the frozen Compose resource profile used by a mode."""
+    profile = MODE_PROFILES[mode]
+    return {
+        "source": "compose-declared",
+        "image": MINIO_IMAGE,
+        "deployment_file": profile["deployment_file"],
+        "services": profile["services"],
+        "total_cpu_limit": profile["total_cpu_limit"],
+        "total_memory_gib": profile["total_memory_gib"],
+    }
+
+
 def build_report(
     *,
     settings: S3Settings,
@@ -368,17 +525,31 @@ def build_report(
     error_counts = Counter(result["error"] for result in failed)
 
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "context": {
-            "timestamp_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "timestamp_utc": datetime.now(timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z"),
             "endpoint": settings.endpoint_url,
             "bucket": bucket_name,
             "mode": topology,
+            "credential_source": settings.credential_source,
+            "object_prefix": object_prefix,
+            "git": {
+                "branch": git_output("branch", "--show-current"),
+                "commit": git_output("rev-parse", "HEAD"),
+                "working_tree_dirty": working_tree_is_dirty(),
+            },
+            "host": host_context(),
+            "runtime": runtime_context(topology),
         },
         "workload": {
             "num_files": num_files,
             "threads": threads,
             "file_size_bytes": file_size_bytes,
+            "planned_total_bytes": num_files * file_size_bytes,
+            "planned_inflight_bytes": min(threads, num_files)
+            * file_size_bytes,
         },
         "performance": {
             "total_duration_sec": round(total_duration, 4),
@@ -397,28 +568,50 @@ def build_report(
             "p95": round(percentile(latencies, 95), 4),
             "p99": round(percentile(latencies, 99), 4),
         },
+        "retry": {
+            "max_attempts": MAX_ATTEMPTS,
+            "requests_retried": sum(
+                1 for result in results if result["attempts"] > 1
+            ),
+        },
         "failures": {
             "by_error": dict(error_counts.most_common(10)),
         },
     }
 
 
-def write_outputs(report: dict[str, Any], results: list[dict[str, Any]], output_path: Path) -> None:
-    """Ghi cả file JSON tổng hợp và file CSV chi tiết từng request."""
+def write_outputs(
+    report: dict[str, Any],
+    results: list[dict[str, Any]],
+    output_path: Path,
+) -> None:
+    """Write a JSON summary and request-level CSV evidence."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    
-    # 1. Ghi file JSON
+
     json_path = output_path.with_suffix(".json")
-    json_path.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    
-    # 2. Ghi file CSV
+    json_path.write_text(
+        json.dumps(report, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
     csv_path = output_path.with_suffix(".csv")
-    with open(csv_path, "w", newline="", encoding="utf-8") as f:
-        w = csv.writer(f)
-        w.writerow(["Task_ID", "Success", "Latency_ms", "Bytes", "Attempts", "Error"])
-        for r in results:
-            w.writerow([r["object_index"], r["success"], f"{r['latency_ms']:.2f}", r["bytes"], r["attempts"], r["error"]])
-    
+    with csv_path.open("w", newline="", encoding="utf-8") as csv_file:
+        writer = csv.writer(csv_file)
+        writer.writerow(
+            ["Task_ID", "Success", "Latency_ms", "Bytes", "Attempts", "Error"]
+        )
+        for result in results:
+            writer.writerow(
+                [
+                    result["object_index"],
+                    result["success"],
+                    f"{result['latency_ms']:.2f}",
+                    result["bytes"],
+                    result["attempts"],
+                    result["error"],
+                ]
+            )
+
     logger.info("Saved reports to: %s and %s", json_path, csv_path)
 
 

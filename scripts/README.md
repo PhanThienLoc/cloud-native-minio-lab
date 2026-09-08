@@ -1,62 +1,317 @@
-Kích hoạt môi trường ảo venv
-.\venv\Scripts\Activate.ps1
+# Hướng dẫn chạy các script benchmark
 
-1. Cài đặt phụ thuộc
+Chạy tất cả lệnh từ thư mục gốc repository:
 
-PowerShell
+```powershell
+Set-Location <REPO_ROOT>
+```
+
+## 1. Chuẩn bị môi trường
+
+Tạo môi trường ảo và cài dependency:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
-python -m pip install python-dotenv boto3 numpy matplotlib
+python -m pip install -r scripts\requirements.txt
+```
 
-check xem các gói oke chưa 
+Kiểm tra dependency chính:
 
-python -c "import dotenv, boto3, numpy, matplotlib; print('Môi trường đã sẵn sàng!')"
+```powershell
+python -c "import boto3, dotenv; print('Python environment is ready')"
+```
 
-2. Kịch bản A: Test với 1 Node (Standalone)
+Tạo file cấu hình local:
 
-Bước 1: Dọn dẹp các container cũ
+```powershell
+Copy-Item .env.example .env
+```
 
-PowerShell
-docker rm -f minio-standalone
-docker compose -f infra/docker-compose.yml down
+Mở `.env` và thay credential mẫu bằng credential local thật:
 
-Bước 2: Chỉ bật Prometheus và Grafana
+```dotenv
+MINIO_ROOT_USER=<LOCAL_USER>
+MINIO_ROOT_PASSWORD=<LOCAL_PASSWORD>
+```
 
-PowerShell
-docker compose -f infra/docker-compose.yml up -d --no-deps prometheus grafana
+Không commit hoặc push `.env`.
 
-Bước 3: Khởi chạy MinIO Standalone (dùng đúng tài khoản minioadmin)
+## 2. Khởi động Distributed MinIO
 
-PowerShell
-docker run -d --name minio-standalone --network minio-net -p 9001:9000 -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin minio/minio server /data
+Kiểm tra cấu hình:
 
-Bước 4: Khởi tạo bucket benchmark
+```powershell
+docker compose --env-file .env `
+  -f infra/docker-compose.yml `
+  config --quiet
+```
 
-PowerShell
-docker exec minio-standalone mc alias set local http://localhost:9000 minioadmin minioadmin
-docker exec minio-standalone mc mb local/benchmark-bucket --ignore-existing
+Khởi động cụm:
 
-Bước 5: Chạy benchmark Kịch bản A
+```powershell
+docker compose --env-file .env `
+  -f infra/docker-compose.yml `
+  up -d
+```
 
-PowerShell
-cd scripts
-python load_generator.py --num-files 5000 --threads 8 --file-size 1MB --mode standalone --output ..\benchmark-results\raw\standalone_run1
+Kiểm tra container:
 
-3. Kịch bản B: Test với 4 Node (Distributed)
-Bước 1: Xóa node Standalone
+```powershell
+docker compose --env-file .env `
+  -f infra/docker-compose.yml `
+  ps
+```
 
-PowerShell
-docker rm -f minio-standalone
+Kiểm tra endpoint:
 
-Bước 2: Bật toàn bộ cụm 4 node + Nginx + Prometheus + Grafana
+```powershell
+curl.exe -i http://localhost:9000/minio/health/live
+```
 
-PowerShell
-docker compose -f ../infra/docker-compose.yml up -d
+Endpoint benchmark distributed:
 
-Bước 3 :Tạo bucket benchmark-bucket bằng câu lệnh MinIO Client hoặc AWS CLI:
-mc alias set local http://localhost:9000 minioadmin minioadmin
-mc mb local/benchmark-bucket --ignore-existing
+```text
+http://localhost:9000
+```
 
-Bước 4: Chạy benchmark Kịch bản B
+Tạo bucket benchmark:
 
-PowerShell
-python load_generator.py --num-files 5000 --threads 8 --file-size 1MB --mode distributed --output ..\benchmark-results\raw\distributed_run1
+```powershell
+docker run --rm `
+  --network minio-net `
+  --env-file .env `
+  --entrypoint /bin/sh `
+  minio/mc:latest `
+  -c 'mc alias set distributed http://nginx:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" && mc mb --ignore-existing distributed/benchmark-bucket'
+```
+
+## 3. Khởi động Standalone MinIO
+
+Standalone dùng Compose riêng, không dùng lệnh `docker run` thủ công:
+
+```powershell
+docker compose --env-file .env `
+  -f infra/docker-compose.standalone.yml `
+  config --quiet
+
+docker compose --env-file .env `
+  -f infra/docker-compose.standalone.yml `
+  up -d
+
+docker compose --env-file .env `
+  -f infra/docker-compose.standalone.yml `
+  ps
+```
+
+Kiểm tra endpoint:
+
+```powershell
+curl.exe -i http://localhost:9001/minio/health/live
+```
+
+Endpoint benchmark standalone:
+
+```text
+http://localhost:9001
+```
+
+Tạo bucket benchmark:
+
+```powershell
+docker run --rm `
+  --network minio-standalone-net `
+  --env-file .env `
+  --entrypoint /bin/sh `
+  minio/mc:latest `
+  -c 'mc alias set standalone http://minio-standalone:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" && mc mb --ignore-existing standalone/benchmark-bucket'
+```
+
+## 4. Chạy benchmark
+
+Chạy smoke test trước:
+
+```powershell
+$EvidenceRoot = Join-Path (Split-Path (Get-Location) -Parent) "minio-benchmark-evidence"
+New-Item -ItemType Directory -Force $EvidenceRoot | Out-Null
+```
+
+### Distributed smoke test
+
+```powershell
+python scripts/load_generator.py `
+  --num-files 100 `
+  --threads 8 `
+  --file-size 1MB `
+  --mode distributed `
+  --output "$EvidenceRoot\distributed_smoke"
+```
+
+### Standalone smoke test
+
+```powershell
+python scripts/load_generator.py `
+  --num-files 100 `
+  --threads 8 `
+  --file-size 1MB `
+  --mode standalone `
+  --output "$EvidenceRoot\standalone_smoke"
+```
+
+Chỉ chạy workload 5.000 object sau khi smoke test có:
+
+```text
+Success: 100
+Failure: 0
+```
+
+### Distributed workload chính
+
+```powershell
+python scripts/load_generator.py `
+  --num-files 5000 `
+  --threads 8 `
+  --file-size 1MB `
+  --mode distributed `
+  --output "$EvidenceRoot\distributed_run1"
+```
+
+### Standalone workload chính
+
+```powershell
+python scripts/load_generator.py `
+  --num-files 5000 `
+  --threads 8 `
+  --file-size 1MB `
+  --mode standalone `
+  --output "$EvidenceRoot\standalone_run1"
+```
+
+Mỗi mode nên chạy ba lần:
+
+```text
+run1
+run2
+run3
+```
+
+Kết quả JSON và CSV nên lưu ngoài repository để provenance ghi:
+
+```text
+working_tree_dirty=false
+```
+
+## 5. Kết quả benchmark
+
+Mỗi kết quả cần ghi:
+
+- Mode: `standalone` hoặc `distributed`.
+- Endpoint.
+- Số object.
+- Kích thước object.
+- Số thread.
+- Total duration.
+- Throughput.
+- Average latency.
+- P95/P99 latency.
+- Success/failure.
+- Git branch và commit.
+- CPU/RAM host.
+- MinIO image và resource limit.
+
+Các kết quả đã được review có thể lưu tại:
+
+```text
+benchmark-results/raw/
+docs/reports/
+```
+
+Không lưu CSV/JSON benchmark sinh tự động trong `scripts/`.
+
+## 6. Tắt dịch vụ
+
+Tắt standalone nhưng giữ volume:
+
+```powershell
+docker compose --env-file .env `
+  -f infra/docker-compose.standalone.yml `
+  down
+```
+
+Tắt distributed nhưng giữ volume:
+
+```powershell
+docker compose --env-file .env `
+  -f infra/docker-compose.yml `
+  down
+```
+
+Không dùng:
+
+```powershell
+docker compose down -v
+```
+
+vì `-v` sẽ xóa volume dữ liệu MinIO, Prometheus và Grafana.
+
+## 7. Theo dõi tài nguyên
+
+Trong lúc chạy benchmark, mở terminal khác:
+
+```powershell
+docker stats
+```
+
+Theo dõi:
+
+- CPU.
+- Memory.
+- Network I/O.
+- Block I/O.
+- Số process.
+
+Không kết luận benchmark production chỉ từ kết quả Docker trên một máy.
+
+## 8. Lưu ý bảo mật
+
+Không hardcode credential trong:
+
+- Script Python.
+- Script Bash.
+- README.
+- Compose.
+- Tài liệu validation.
+
+Credential phải lấy từ:
+
+```text
+AWS_ACCESS_KEY_ID
+AWS_SECRET_ACCESS_KEY
+```
+
+hoặc:
+
+```text
+MINIO_ROOT_USER
+MINIO_ROOT_PASSWORD
+```
+
+Không commit:
+
+```text
+.env
+dataset
+file download
+benchmark output chưa review
+```
+
+## 9. Trạng thái kiểm thử
+
+Dùng các nhãn sau trong tài liệu:
+
+- `Source inspected`: chỉ mới kiểm tra source.
+- `Runtime verified`: đã chạy command và có output thực tế.
+- `Not executed`: chưa chạy được.
+- `Not verified`: chưa đủ bằng chứng.
+- `Planned`: dự kiến thực hiện sau.

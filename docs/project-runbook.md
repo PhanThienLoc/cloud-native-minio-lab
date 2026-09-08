@@ -2,6 +2,10 @@
 
 Runbook này mô tả flow học tập, chạy thử và bàn giao của dự án trong 6 tuần. Mỗi kết luận cần phân biệt rõ giữa kiểm tra source và bằng chứng runtime.
 
+Để trình bày hệ thống trực tiếp, dùng [Demo Flow](demo-flow.md). Tài liệu này
+chỉ giữ kịch bản ngắn và liên kết tới các validation chi tiết; runbook vẫn là
+nguồn hướng dẫn đầy đủ theo tuần.
+
 ## 1. Kiến trúc và vai trò
 
 ~~~text

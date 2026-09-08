@@ -24,10 +24,28 @@ Yêu cầu:
 - Python 3 và pip cho script Python.
 - PowerShell trên Windows hoặc Bash trên Linux/macOS.
 
-Từ repository root:
+### Clone repository lần đầu
 
 ~~~powershell
-cd D:\Cloud\cloud-native-minio-lab
+git clone https://github.com/PhanThienLoc/cloud-native-minio-lab.git
+Set-Location cloud-native-minio-lab
+git switch develop
+git pull origin develop
+~~~
+
+Nếu repository đã được clone, chạy từ thư mục gốc:
+
+~~~powershell
+Set-Location <REPO_ROOT>
+git switch develop
+git pull origin develop
+~~~
+
+Trên Linux/macOS:
+
+~~~bash
+git clone https://github.com/PhanThienLoc/cloud-native-minio-lab.git
+cd cloud-native-minio-lab
 git switch develop
 git pull origin develop
 ~~~
@@ -37,6 +55,10 @@ Tạo credential local một lần:
 ~~~powershell
 if (!(Test-Path .env)) { Copy-Item .env.example .env }
 ~~~
+
+Mở `.env` và bảo đảm `MINIO_ROOT_USER` cùng `MINIO_ROOT_PASSWORD` phù hợp với
+cụm mới. Nếu dùng các volume MinIO đã tồn tại, phải giữ đúng credential đã dùng
+khi khởi tạo volume đó.
 
 Không commit .env, credential thật hoặc dataset sinh ra.
 
@@ -80,7 +102,15 @@ Tạo môi trường Python:
 ~~~powershell
 python -m venv .venv
 .venv\Scripts\Activate.ps1
-pip install -r scripts\requirements.txt
+python -m pip install -r scripts\requirements.txt
+~~~
+
+Trên Linux/macOS:
+
+~~~bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r scripts/requirements.txt
 ~~~
 
 Chạy test nhỏ:
@@ -163,16 +193,29 @@ CPU/RAM của host.
 
 Source hiện tại:
 
-- scripts/data_ingestion.py mới tạo file partition mẫu, chưa upload S3.
-- scripts/connect_test.py đã có và dùng boto3 + python-dotenv để upload/download qua Nginx Load Balancer.
-- scripts/mc_setup.sh mới tạo một bucket mặc định và cần Member 3 review trước khi dùng như deliverable 3 bucket.
+- `scripts/data_ingestion.py` đã upload dataset lên MinIO qua Nginx, tạo object key
+  theo `data_type/year/month/day`, gắn metadata, retry lỗi tạm thời và xác minh object.
+- `scripts/connect_test.py` dùng boto3 + python-dotenv để upload/download qua Nginx
+  Load Balancer và kiểm tra SHA256.
+- `scripts/mc_setup.sh` dùng credential từ environment và tạo ba bucket
+  `raw-data`, `processed-data`, `system-logs` theo cách idempotent.
+- `scripts/verify_checksum.py` tải object từ MinIO và so sánh SHA256 với file nguồn.
 
-Flow kiểm thử hiện tại:
+Flow kiểm thử hiện tại. Dataset cần được tạo lại nếu đã bị xóa sau validation
+Tuần 1:
 
 ~~~powershell
-python scripts\connect_test.py --file scripts\sample_data\user_data.csv --bucket demo-bucket
-bash scripts/mc_setup.sh
+python scripts\generate_data.py --output-dir .\scripts\sample_data_validation --log-size-mb 1 --csv-size-mb 1 --binary-count 1 --binary-size-kb 20
+python scripts\connect_test.py `
+  --file .\scripts\sample_data_validation\user_data.csv `
+  --download-path .\scripts\sample_data_validation\downloads\user_data.csv `
+  --bucket demo-bucket
+Remove-Item -Recurse -Force .\scripts\sample_data_validation
 ~~~
+
+Có thể chạy `mc_setup.sh` sau khi `.env` có credential thật. Trên Windows chưa có
+Bash hoặc `mc`, dùng lệnh MinIO Client container trong
+[`validation/member3-checksum-and-mc.md`](validation/member3-checksum-and-mc.md).
 
 Endpoint và credential phải lấy từ environment; không thêm secret vào script hoặc README.
 
@@ -180,24 +223,105 @@ Script kết nối ghi lại latency upload/download cơ bản để làm mốc 
 
 ## 7. Tuần 4: observability và load testing
 
-Endpoint monitoring hiện có:
+Thêm credential Grafana vào `.env`; không commit giá trị thật:
+
+~~~dotenv
+GF_SECURITY_ADMIN_USER=<GRAFANA_ADMIN_USER>
+GF_SECURITY_ADMIN_PASSWORD=<GRAFANA_ADMIN_PASSWORD>
+~~~
+
+Khởi động stack từ thư mục gốc repository:
+
+~~~powershell
+docker compose --env-file .env -f infra/docker-compose.yml config --quiet
+docker compose --env-file .env -f infra/docker-compose.yml up -d
+docker compose --env-file .env -f infra/docker-compose.yml ps
+~~~
+
+Endpoint monitoring:
 
 - Prometheus: http://localhost:9090
 - Grafana: http://localhost:3000
 
-Khởi động:
+Prometheus scrape ba nhóm endpoint từ cả bốn node:
+
+- `minio-cluster`: `/minio/v2/metrics/cluster` cho storage/object metrics;
+- `minio-node`: `/minio/v2/metrics/node` cho throughput và S3 request metrics.
+- `minio-api`: `/minio/metrics/v3/api/requests` cho request rate theo API
+  operation như `GetObject`, `PutObject` và `DeleteObject`.
+
+Kiểm tra tại http://localhost:9090/targets. Cả mười hai MinIO target phải có trạng
+thái `UP`. MinIO metrics được cấu hình `public` cho lab, nhưng port `9000` của từng
+node không được publish ra host; chỉ container trong `minio-net` truy cập trực
+tiếp được metrics endpoint.
+
+Grafana tự provision datasource Prometheus và dashboard `MinIO Cluster Overview`.
+Dashboard gồm throughput, request rate, storage usage, object count và trạng thái
+bốn node. Không cần import dashboard thủ công.
+
+Kiểm tra health và log:
 
 ~~~powershell
-docker compose --env-file .env -f infra/docker-compose.yml up -d prometheus grafana
+curl.exe -i http://localhost:9090/-/healthy
+curl.exe -i http://localhost:3000/api/health
+docker compose --env-file .env -f infra/docker-compose.yml logs --tail=100 prometheus grafana
 ~~~
 
-Gap hiện tại: infra/prometheus/prometheus.yml chỉ self-scrape Prometheus, chưa scrape MinIO metrics. Trước load test cần bổ sung và kiểm chứng request rate, latency, throughput, object/storage usage và node availability.
+Giới hạn tối đa của lab là `512 MiB RAM` và `0.50 CPU` cho mỗi service Prometheus
+và Grafana. Trước load test 5.000 object, chạy thử 100 object và theo dõi Docker
+Desktop; giảm threads nếu host dùng trên 80% RAM.
 
-## 8. Tuần 5: benchmark
+## 8. Tuần 5: Freeze gates, readiness và benchmark
 
-Mỗi benchmark cần ghi topology 1 node hoặc 4 node, workload, object size, concurrency, latency, throughput, success/error rate, host resource và commit cấu hình. Không so sánh hai kết quả nếu workload hoặc tài nguyên host khác nhau.
+Infrastructure Freeze áp dụng từ baseline `develop` tại commit `2245087`; Final
+Code Freeze chưa kích hoạt. Distributed baseline, endpoint, resource limits và
+monitoring config không được đổi trong khi benchmark. `feat:` chỉ được phép cho
+deliverable tồn đọng đã có trong roadmap như benchmark mode/harness, checksum và
+IAM; không dùng `fix:` để che một tính năng mới. Quy định đầy đủ nằm tại
+[`governance/week5-code-freeze.md`](governance/week5-code-freeze.md).
+
+Kiểm tra file môi trường và cấu hình trước khi khởi động:
+
+~~~powershell
+docker compose --env-file .env -f infra/docker-compose.yml config --quiet
+docker compose --env-file .env -f infra/docker-compose.yml up -d
+docker compose --env-file .env -f infra/docker-compose.yml ps
+~~~
+
+Để kiểm tra persistence của stack chính, chỉ dùng `down` không kèm `-v`, sau đó
+khởi động lại bằng lệnh `up -d`. Không chạy `down -v` trên project chính vì thao tác
+đó xóa tám volume MinIO cùng volume Prometheus/Grafana.
+
+Fresh bootstrap đã được xác minh bằng một Compose project cô lập với volume riêng,
+không xóa dữ liệu của stack chính. Kết quả chi tiết nằm tại
+[`validation/week5-teamlead-readiness.md`](validation/week5-teamlead-readiness.md).
+Đây là `one-command infrastructure bootstrap`: bucket, IAM, versioning và lifecycle
+chưa được chứng minh tự provision trên volume mới.
+
+Mỗi benchmark cần ghi topology 1 node hoặc 4 node, workload, object size,
+concurrency, latency, throughput, success/error rate, tài nguyên host và commit cấu
+hình. Không so sánh hai kết quả nếu workload, resource limit hoặc host khác nhau.
+Benchmark Standalone-vs-Distributed là deliverable đã tích hợp của Member 2.
+Flow reproducible và endpoint của hai mode nằm tại
+[`../benchmark-results/README.md`](../benchmark-results/README.md); không dùng kết quả
+trên một host Docker để kết luận production performance.
+
+Nguyên liệu báo cáo và slide của Nhóm trưởng:
+
+- Phân tích CAP, NFS và MinIO:
+  [`reports/week5-cap-cloud-native-and-future.md`](reports/week5-cap-cloud-native-and-future.md).
+- Handoff sơ đồ, cấu hình và số liệu đã xác minh:
+  [`meeting_logs/week5-slide-handoff.md`](meeting_logs/week5-slide-handoff.md).
+
+Screenshot Grafana và video startup phải được chụp/quay từ runtime thật. Nếu chưa có
+artifact thì ghi `Not captured` hoặc `Not recorded`, không dùng ảnh hay kết quả giả lập.
 
 ## 9. Tuần 6: chaos engineering
+
+Ba kiểm thử cơ bản đã có evidence tại
+[`validation/week6-basic-chaos-and-resilience.md`](validation/week6-basic-chaos-and-resilience.md):
+node offline vẫn nhận upload, credential sai bị từ chối và load smoke 100 object
+hoàn tất. Recovery `4/4` sau khi start lại node vẫn cần ghi nhận bằng `mc admin info`.
 
 Flow tối thiểu:
 

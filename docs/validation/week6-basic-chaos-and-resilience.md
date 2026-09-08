@@ -45,8 +45,10 @@ docker compose --env-file .env -f infra/docker-compose.yml start minio3
 
 - `Runtime verified`: hệ thống vẫn nhận upload khi một node offline.
 - `Runtime verified`: lệnh start lại `minio3` đã thực thi thành công.
-- `Not verified`: chưa có output `mc admin info` sau recovery để xác nhận lại
-  `Network: 4/4 OK` và thời gian healing.
+- `Runtime verified`: kiểm tra `mc admin info` sau recovery xác nhận lại cả
+  bốn node có `Network: 4/4 OK`, mỗi node có `Drives: 2/2 OK`, và phần tổng
+  kết có `8 drives online, 0 drives offline, EC:4`.
+- `Not verified`: chưa đo và ghi lại chính xác thời gian healing/recovery.
 - Không kết luận rằng hệ thống chịu được mọi lỗi node hoặc có HA production.
 
 ## 2. Credential không hợp lệ
@@ -104,9 +106,6 @@ smoke workload 100 object hoàn tất không lỗi.
 
 | Scenario | Trạng thái | Bằng chứng |
 |---|---|---|
-| Một node offline | Đạt một phần | Upload thành công; recovery chưa xác nhận lại bằng `mc admin info` |
+| Một node offline | Đạt | Upload thành công khi `minio3` offline; sau recovery, `mc admin info` xác nhận `4/4 OK` và 8 drive online |
 | Credential sai | Đạt | Request bị MinIO từ chối |
 | Tải smoke | Đạt | 100/100, failure 0 |
-
-Không commit file test, dataset, credential hoặc output benchmark trong thư mục
-Temp vào repository.

@@ -5,11 +5,12 @@ services:
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER must be set in .env}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set in .env}
-      # Metrics stay reachable only from containers attached to minio-net.
       MINIO_PROMETHEUS_AUTH_TYPE: public
+    ports:
+      - "9001:9000"
     volumes:
-      - minio1-data1:/data1
-      - minio1-data2:/data2
+      - D:/minio_data/minio1/data1:/data1
+      - D:/minio_data/minio1/data2:/data2
     networks:
       - minio-net
     healthcheck:
@@ -22,8 +23,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "1.0"
-          memory: 1G
+          cpus: "2.0"
+          memory: 2G
 
   minio2:
     image: minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
@@ -33,8 +34,8 @@ services:
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set in .env}
       MINIO_PROMETHEUS_AUTH_TYPE: public
     volumes:
-      - minio2-data1:/data1
-      - minio2-data2:/data2
+      - D:/minio_data/minio2/data1:/data1
+      - D:/minio_data/minio2/data2:/data2
     networks:
       - minio-net
     healthcheck:
@@ -58,8 +59,8 @@ services:
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set in .env}
       MINIO_PROMETHEUS_AUTH_TYPE: public
     volumes:
-      - minio3-data1:/data1
-      - minio3-data2:/data2
+      - D:/minio_data/minio3/data1:/data1
+      - D:/minio_data/minio3/data2:/data2
     networks:
       - minio-net
     healthcheck:
@@ -83,8 +84,8 @@ services:
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set in .env}
       MINIO_PROMETHEUS_AUTH_TYPE: public
     volumes:
-      - minio4-data1:/data1
-      - minio4-data2:/data2
+      - D:/minio_data/minio4/data1:/data1
+      - D:/minio_data/minio4/data2:/data2
     networks:
       - minio-net
     healthcheck:
@@ -192,14 +193,6 @@ services:
           memory: 512M
 
 volumes:
-  minio1-data1:
-  minio1-data2:
-  minio2-data1:
-  minio2-data2:
-  minio3-data1:
-  minio3-data2:
-  minio4-data1:
-  minio4-data2:
   prometheus-data:
   grafana-data:
 

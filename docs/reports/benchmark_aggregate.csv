@@ -1,0 +1,3 @@
+mode,runs,throughput_mean_mib_s,throughput_stdev_mib_s,latency_avg_mean_ms,latency_avg_stdev_ms,latency_p95_mean_ms,latency_p99_mean_ms
+distributed,3,14.7334,1.061,545.1546,41.335,688.1658,814.6906
+standalone,3,139.1053,40.731,62.2749,19.1246,105.6797,142.0702

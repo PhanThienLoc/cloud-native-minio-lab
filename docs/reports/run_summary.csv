@@ -1,0 +1,7 @@
+file,mode,throughput_mib_s,total_duration_sec,total_uploaded_mib,success_rate_percent,latency_avg_ms,latency_p95_ms,latency_p99_ms
+distributed_run1.json,distributed,13.2349,377.7877,5000.0,100.0,603.5561,850.1593,1103.6023
+distributed_run2.json,distributed,15.4162,324.3346,5000.0,100.0,518.1512,615.3315,691.0994
+distributed_run3.json,distributed,15.5491,321.5615,5000.0,100.0,513.7566,599.0067,649.3701
+standalone_run1.json,standalone,190.2169,26.2858,5000.0,100.0,41.4094,78.6976,90.1963
+standalone_run2.json,standalone,136.5546,36.6154,5000.0,100.0,57.8047,103.6542,131.1659
+standalone_run3.json,standalone,90.5445,55.2215,5000.0,100.0,87.6106,134.6873,204.8483

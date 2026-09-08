@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "context": {
-    "timestamp_utc": "2026-08-26T16:45:40.237095Z",
+    "timestamp_utc": "2026-09-08T15:33:13.334158Z",
     "endpoint": "http://localhost:9000",
     "bucket": "benchmark-bucket",
     "mode": "distributed"
@@ -12,18 +12,18 @@
     "file_size_bytes": 1048576
   },
   "performance": {
-    "total_duration_sec": 426.1888,
+    "total_duration_sec": 321.5615,
     "total_uploaded_mib": 5000.0,
-    "average_throughput_mib_s": 11.7319,
+    "average_throughput_mib_s": 15.5491,
     "success_rate_percent": 100.0,
     "failure_rate_percent": 0.0,
     "total_success": 5000,
     "total_failed": 0
   },
   "latency_ms": {
-    "average": 681.0175,
-    "p95": 1031.855,
-    "p99": 1357.1781
+    "average": 513.7566,
+    "p95": 599.0067,
+    "p99": 649.3701
   },
   "failures": {
     "by_error": {}

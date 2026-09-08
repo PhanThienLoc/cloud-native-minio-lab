@@ -1,7 +1,15 @@
+Kích hoạt môi trường ảo venv
+.\venv\Scripts\Activate.ps1
+
 1. Cài đặt phụ thuộc
 
 PowerShell
-pip install python-dotenv boto3 numpy matplotlib
+python -m pip install --upgrade pip
+python -m pip install python-dotenv boto3 numpy matplotlib
+
+check xem các gói oke chưa 
+
+python -c "import dotenv, boto3, numpy, matplotlib; print('Môi trường đã sẵn sàng!')"
 
 2. Kịch bản A: Test với 1 Node (Standalone)
 
@@ -44,7 +52,11 @@ Bước 2: Bật toàn bộ cụm 4 node + Nginx + Prometheus + Grafana
 PowerShell
 docker compose -f ../infra/docker-compose.yml up -d
 
-Bước 3: Chạy benchmark Kịch bản B
+Bước 3 :Tạo bucket benchmark-bucket bằng câu lệnh MinIO Client hoặc AWS CLI:
+mc alias set local http://localhost:9000 minioadmin minioadmin
+mc mb local/benchmark-bucket --ignore-existing
+
+Bước 4: Chạy benchmark Kịch bản B
 
 PowerShell
 python load_generator.py --num-files 5000 --threads 8 --file-size 1MB --mode distributed --output distributed_run1

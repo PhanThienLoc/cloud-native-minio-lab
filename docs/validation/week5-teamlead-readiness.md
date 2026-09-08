@@ -93,14 +93,18 @@ bootstrap`. Chỉ đổi thành `complete-system bootstrap` sau khi các thành 
 
 ## Điểm cần theo dõi
 
+### Cập nhật sau khi các PR đã merge
+
+- Benchmark mode/harness của Member 2 đã được merge vào `develop`.
+- `mc_setup.sh` và `verify_checksum.py` của Member 3 đã được merge vào `develop`;
+  không còn là blocker source. Evidence checksum runtime cần xem tại tài liệu
+  validation tương ứng.
+- Kiểm thử node offline, credential sai và load smoke được ghi tại
+  [`validation/week6-basic-chaos-and-resilience.md`](week6-basic-chaos-and-resilience.md).
+
 - Grafana 11.2.0 vẫn log duplicate registration cho plugin built-in `xychart`;
   lỗi không chặn HTTP `200` hoặc dashboard provisioning trong lần kiểm tra này.
 - Screenshot Grafana và video startup chưa được coordinator thu vì không có
   browser/video recorder; phải quay/chụp thủ công và không được ghi là đã có.
-- Benchmark Standalone-vs-Distributed thuộc Member 2 và chưa được coi là hoàn
-  thành chỉ từ baseline 4 node Tuần 4. Source chưa có `--mode`; `--topology` chỉ
-  ghi nhãn report và chưa tạo standalone topology thật.
-- `mc_setup.sh` còn credential fallback hardcode và mới tạo một bucket; đây là
-  security/functional blocker trước Final Code Freeze.
-- Checksum của Member 3 hiện mới hash local file, chưa kiểm tra upload-download.
-- IAM/Lifecycle/Chaos của Member 3 cần review độc lập trước khi đưa vào báo cáo.
+- IAM, lifecycle và recovery sau restart cần tiếp tục ghi evidence nếu muốn đưa
+  thành kết luận hoàn chỉnh trong báo cáo.

@@ -197,8 +197,9 @@ Source hiện tại:
   theo `data_type/year/month/day`, gắn metadata, retry lỗi tạm thời và xác minh object.
 - `scripts/connect_test.py` dùng boto3 + python-dotenv để upload/download qua Nginx
   Load Balancer và kiểm tra SHA256.
-- `scripts/mc_setup.sh` mới tạo một bucket mặc định và cần Member 3 review trước khi
-  dùng như deliverable ba bucket.
+- `scripts/mc_setup.sh` dùng credential từ environment và tạo ba bucket
+  `raw-data`, `processed-data`, `system-logs` theo cách idempotent.
+- `scripts/verify_checksum.py` tải object từ MinIO và so sánh SHA256 với file nguồn.
 
 Flow kiểm thử hiện tại. Dataset cần được tạo lại nếu đã bị xóa sau validation
 Tuần 1:
@@ -212,10 +213,9 @@ python scripts\connect_test.py `
 Remove-Item -Recurse -Force .\scripts\sample_data_validation
 ~~~
 
-`mc_setup.sh` hiện chỉ là script đang chờ Member 3 hoàn thiện và review; không
-dùng nó để kết luận deliverable ba bucket đã đạt. Trong thời gian chờ, dùng các
-lệnh `docker run ... minio/mc` ở mục 5.1 để kiểm tra `mc alias set`, `mc ls` và
-tạo bucket.
+Có thể chạy `mc_setup.sh` sau khi `.env` có credential thật. Trên Windows chưa có
+Bash hoặc `mc`, dùng lệnh MinIO Client container trong
+[`validation/member3-checksum-and-mc.md`](validation/member3-checksum-and-mc.md).
 
 Endpoint và credential phải lấy từ environment; không thêm secret vào script hoặc README.
 
@@ -301,10 +301,10 @@ chưa được chứng minh tự provision trên volume mới.
 Mỗi benchmark cần ghi topology 1 node hoặc 4 node, workload, object size,
 concurrency, latency, throughput, success/error rate, tài nguyên host và commit cấu
 hình. Không so sánh hai kết quả nếu workload, resource limit hoặc host khác nhau.
-Benchmark Standalone-vs-Distributed là deliverable của Member 2; baseline 4 node
-Tuần 4 không tự tạo thành phép so sánh hai topology. `--topology` hiện chỉ ghi nhãn
-JSON; Member 2 phải bổ sung mode/harness trỏ tới standalone deployment thật, cô lập
-với distributed baseline và chạy cùng workload trước Final Code Freeze.
+Benchmark Standalone-vs-Distributed là deliverable đã tích hợp của Member 2.
+Flow reproducible và endpoint của hai mode nằm tại
+[`../benchmark-results/README.md`](../benchmark-results/README.md); không dùng kết quả
+trên một host Docker để kết luận production performance.
 
 Nguyên liệu báo cáo và slide của Nhóm trưởng:
 
@@ -317,6 +317,11 @@ Screenshot Grafana và video startup phải được chụp/quay từ runtime th
 artifact thì ghi `Not captured` hoặc `Not recorded`, không dùng ảnh hay kết quả giả lập.
 
 ## 9. Tuần 6: chaos engineering
+
+Ba kiểm thử cơ bản đã có evidence tại
+[`validation/week6-basic-chaos-and-resilience.md`](validation/week6-basic-chaos-and-resilience.md):
+node offline vẫn nhận upload, credential sai bị từ chối và load smoke 100 object
+hoàn tất. Recovery `4/4` sau khi start lại node vẫn cần ghi nhận bằng `mc admin info`.
 
 Flow tối thiểu:
 
